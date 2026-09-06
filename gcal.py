@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
 
 
-def fetch(url, timeout=30):
+def fetch(url, timeout=300):
     req = urllib.request.Request(url, headers={"User-Agent": "healthy-life/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
@@ -69,6 +69,14 @@ def as_datetime(params, value, tz):
         except Exception:
             local = naive
     return local.date(), local.strftime("%H:%M")
+
+
+def end_time(ev, tz):
+    """Local HH:MM the event finishes, or None for all-day / open-ended."""
+    if "DTEND" not in ev:
+        return None
+    _, t = as_datetime(*ev["DTEND"], tz)
+    return t
 
 
 def occurs_on(ev, target, tz):
@@ -164,6 +172,7 @@ def events_on(urls, target, tz):
             if key in seen:
                 continue
             seen.add(key)
-            out.append({"title": title, "time": slot or None, "all_day": not slot})
+            out.append({"title": title, "time": slot or None,
+                        "ends": end_time(ev, tz), "all_day": not slot})
     out.sort(key=lambda e: (e["time"] is None, e["time"] or ""))
     return out

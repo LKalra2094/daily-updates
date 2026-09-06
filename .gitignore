@@ -8,3 +8,6 @@ habits.db
 habits.json
 
 __pycache__/
+
+.auth_url
+.auth_result

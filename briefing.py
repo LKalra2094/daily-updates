@@ -4,6 +4,7 @@
 Modules, in the order they appear in the message:
   prose   - Gemini narrates the verified stats below it
   habits  - performance against weekly targets, from the Todoist activity log
+  sleep   - last night against target, from Google Health (Fitbit)
   today   - calendar events (Google iCal feed) and Todoist tasks due
 
 Every number is computed here. The model only ever writes prose over numbers it
@@ -23,11 +24,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import gcal
+import sleep as sleep_mod
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "habits.db"
 TZ = ZoneInfo("America/Los_Angeles")
 WINDOW = 30
+TELEGRAM_LIMIT = 4096  # hard cap on a single Bot API message
 # Tried in order; 3.8 intermittently 503s under load. 3.6 is skipped - it
 # rejects thinkingBudget: 0.
 GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
@@ -44,7 +47,7 @@ def load_env():
             os.environ.setdefault(k.strip(), v.strip())
 
 
-def http(url, token=None, data=None, headers=None, timeout=30):
+def http(url, token=None, data=None, headers=None, timeout=300):
     h = dict(headers or {})
     if token:
         h["Authorization"] = f"Bearer {token}"
@@ -184,22 +187,23 @@ def stats(con, habits, today):
 
 
 def trend(con, h, today, window_start):
-    """This week against the week before, and time since the last lapse."""
+    """The shape of the window, day by day, plus time since the last event.
+
+    No week-sized buckets: the model is handed the raw daily pattern and reads
+    the trend out of it.
+    """
     def count(a, b):
         return con.execute(
             "SELECT COUNT(*) FROM completions WHERE habit=? AND day>=? AND day<?",
             (h["todoist"], a.isoformat(), b.isoformat()),
         ).fetchone()[0]
 
-    w1_start = today - timedelta(days=7)
-    w2_start = today - timedelta(days=14)
-    out = {}
-    if w1_start >= window_start:
-        out["last_7_days"] = count(w1_start, today)
-    if w2_start >= window_start:
-        out["prior_7_days"] = count(w2_start, w1_start)
+    days, d = [], window_start
+    while d < today:
+        days.append("X" if count(d, d + timedelta(days=1)) else "-")
+        d += timedelta(days=1)
+    out = {"daily_pattern": "".join(days)}
 
-    # Days since the most recent lapse (avoid habits) or completion (do habits).
     if h["kind"] == "avoid":
         d, gap = today - timedelta(days=1), 0
         while d >= window_start and count(d, d + timedelta(days=1)):
@@ -226,12 +230,15 @@ def target_str(h):
 
 # ---------------------------------------------------------------- prose
 
-def narrate(rows, elapsed, tasks, events):
+def narrate(rows, elapsed, tasks, events, sleep_data):
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         return None
     facts = {
         "days_of_history": elapsed,
+        "how_to_read_daily_pattern": (
+            "One character per day, oldest first, ending yesterday. "
+            "X means logged, - means not."),
         "habits": [
             {"name": h["label"],
              "what_the_number_counts": (
@@ -246,10 +253,13 @@ def narrate(rows, elapsed, tasks, events):
                 if h["kind"] == "avoid" else
                 {"times_logged": h["logged"]}),
              **{k: h[k] for k in
-                ("last_7_days", "prior_7_days", "clean_days_running", "days_since_last")
+                ("daily_pattern", "clean_days_running", "days_since_last")
                 if k in h}}
             for h in rows
         ],
+        "sleep": sleep_data,
+        "last_event_ends_today": (
+            max((e["ends"] for e in events if e.get("ends")), default=None)),
         "todays_events": [
             {"title": e["title"], "time": am_pm(e["time"]) or "all day"}
             for e in events
@@ -263,11 +273,8 @@ def narrate(rows, elapsed, tasks, events):
         "systemInstruction": {"parts": [{"text": (ROOT / "prompt.md").read_text()}]},
         "contents": [{"role": "user",
                       "parts": [{"text": json.dumps(facts, indent=2)}]}],
-        # thinkingBudget 0: reasoning tokens otherwise eat the output budget and
-        # truncate the paragraph mid-sentence.
         "generationConfig": {
             "temperature": 0.8,
-            "maxOutputTokens": 1000,
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
@@ -276,7 +283,7 @@ def narrate(rows, elapsed, tasks, events):
             r = http(
                 "https://generativelanguage.googleapis.com/v1beta/models/"
                 f"{model}:generateContent",
-                data=payload, headers={"x-goog-api-key": key}, timeout=60,
+                data=payload, headers={"x-goog-api-key": key}, timeout=300,
             )
             cand = r["candidates"][0]
             if cand.get("finishReason") not in (None, "STOP"):
@@ -306,7 +313,7 @@ def am_pm(hhmm):
     return f"{h12}:{m:02d}{suffix}" if m else f"{h12}{suffix}"
 
 
-def render_block(rows, elapsed, tasks, events, today):
+def render_block(rows, elapsed, tasks, events, sleep_data, today):
     """The fixed-width part: habit table and the day's schedule."""
     out = [today.strftime("%A, %-d %B"), ""]
     if elapsed == 0:
@@ -322,6 +329,18 @@ def render_block(rows, elapsed, tasks, events, today):
                 f"{h['label']:<{w}}   {h['per_week']:>5.1f}   {target_str(h):>6}"
                 f"   {mark}{tail}"
             )
+        out.append("")
+
+    if sleep_data and not sleep_data.get("no_data"):
+        n = sleep_data["most_recent_night"]
+        when = ("last night" if n["nights_ago"] <= 1
+                else f"{n['nights_ago']} nights ago")
+        out.append(f"SLEEP · {when}")
+        out.append(f"{'asleep':<8} {n['asleep']:>6}   target {sleep_data['target_hours']}h")
+        out.append(f"{'bed':<8} {am_pm(n['went_to_bed']):>6}   target "
+                   f"{am_pm(n['target_bed_that_night'])}")
+        out.append(f"{'woke':<8} {am_pm(n['woke']):>6}   target "
+                   f"{am_pm(n['target_wake_that_night'])}")
         out.append("")
 
     out.append("TODAY")
@@ -358,20 +377,32 @@ def main():
     tasks = today_tasks(token, habits, today)
     events = gcal.events_on(
         os.environ.get("GOOGLE_CALENDAR_ICS", "").split(","), today, TZ)
+    sleep_data = None
+    if os.environ.get("GOOGLE_HEALTH_REFRESH_TOKEN"):
+        try:
+            tok = sleep_mod.access_token()
+            sleep_data = sleep_mod.summarise(
+                sleep_mod.nights(today - timedelta(days=WINDOW), tok),
+                sleep_mod.resting_hr(tok), today)
+        except Exception as e:  # a dead feed must not cost you the briefing
+            print(f"sleep unavailable: {e}", file=sys.stderr)
     # With no completed day yet every stat is zero, which reads as "you did
     # nothing" rather than "nothing has been measured". Skip the prose.
     skip = "--no-prose" in sys.argv or elapsed == 0
-    prose = None if skip else narrate(rows, elapsed, tasks, events)
-    block = render_block(rows, elapsed, tasks, events, today)
+    prose = None if skip else narrate(rows, elapsed, tasks, events, sleep_data)
+    block = render_block(rows, elapsed, tasks, events, sleep_data, today)
     if "--dry-run" in sys.argv:
         print("\n\n".join(x for x in (prose, block) if x))
         return
     # Prose is plain text so it reflows; the table needs fixed width.
-    html = ""
-    if prose:
-        html += escape(prose) + "\n\n"
-    html += "<pre>" + escape(block) + "</pre>"
-    print("sent" if send(html).get("ok") else "FAILED")
+    head = escape(prose) + "\n\n" if prose else ""
+    table = "<pre>" + escape(block) + "</pre>"
+    if len(head) + len(table) <= TELEGRAM_LIMIT:
+        parts = [head + table]
+    else:
+        # Two messages rather than a truncated one.
+        parts = [p for p in (head.strip(), table) if p]
+    print("sent" if all(send(p).get("ok") for p in parts) else "FAILED")
 
 
 if __name__ == "__main__":
