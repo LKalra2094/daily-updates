@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 
 import gcal
 import sleep as sleep_mod
+from retry import Unavailable, retry
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "habits.db"
@@ -47,7 +48,8 @@ def load_env():
             os.environ.setdefault(k.strip(), v.strip())
 
 
-def http(url, token=None, data=None, headers=None, timeout=300):
+def http(url, token=None, data=None, headers=None, timeout=300,
+         what=None, log=None):
     h = dict(headers or {})
     if token:
         h["Authorization"] = f"Bearer {token}"
@@ -56,8 +58,11 @@ def http(url, token=None, data=None, headers=None, timeout=300):
         body = json.dumps(data).encode()
         h["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+
+    def once():
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    return retry(once, what or url, log=log)
 
 
 def db():
@@ -72,7 +77,7 @@ def db():
 
 # ---------------------------------------------------------------- todoist
 
-def backfill(con, token, days=7):
+def backfill(con, token, days=7, log=None):
     """Pull recent completions from the Todoist activity log.
 
     Recurring tasks never appear in the completed-tasks endpoints - completing
@@ -87,7 +92,7 @@ def backfill(con, token, days=7):
             params["cursor"] = cursor
         data = http(
             "https://api.todoist.com/api/v1/activities?" + urllib.parse.urlencode(params),
-            token,
+            token, what="todoist activity", log=log,
         )
         results = data.get("results", [])
         if not results:
@@ -116,9 +121,10 @@ def backfill(con, token, days=7):
     return stored
 
 
-def today_tasks(token, habits, today):
+def today_tasks(token, habits, today, log=None):
     """Everything due today that is not one of the habits."""
-    data = http("https://api.todoist.com/api/v1/tasks", token)
+    data = http("https://api.todoist.com/api/v1/tasks", token,
+                what="todoist tasks", log=log)
     tasks = data.get("results", data)
     habit_names = {h["todoist"] for h in habits}
     habit_projects = {
@@ -230,7 +236,7 @@ def target_str(h):
 
 # ---------------------------------------------------------------- prose
 
-def narrate(rows, elapsed, tasks, events, sleep_data):
+def narrate(rows, elapsed, tasks, events, sleep_data, failed):
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         return None
@@ -258,6 +264,7 @@ def narrate(rows, elapsed, tasks, events, sleep_data):
             for h in rows
         ],
         "sleep": sleep_data,
+        "sources_unavailable_today": failed or None,
         "last_event_ends_today": (
             max((e["ends"] for e in events if e.get("ends")), default=None)),
         "todays_events": [
@@ -284,6 +291,7 @@ def narrate(rows, elapsed, tasks, events, sleep_data):
                 "https://generativelanguage.googleapis.com/v1beta/models/"
                 f"{model}:generateContent",
                 data=payload, headers={"x-goog-api-key": key}, timeout=300,
+                what=model,
             )
             cand = r["candidates"][0]
             if cand.get("finishReason") not in (None, "STOP"):
@@ -296,7 +304,8 @@ def narrate(rows, elapsed, tasks, events, sleep_data):
             ).strip()
             if text:
                 return text
-        except (urllib.error.URLError, KeyError, IndexError, TimeoutError) as e:
+        except (Unavailable, urllib.error.URLError, KeyError,
+                IndexError, TimeoutError) as e:
             print(f"{model}: {e}", file=sys.stderr)
     return None
 
@@ -313,10 +322,12 @@ def am_pm(hhmm):
     return f"{h12}:{m:02d}{suffix}" if m else f"{h12}{suffix}"
 
 
-def render_block(rows, elapsed, tasks, events, sleep_data, today):
+def render_block(rows, elapsed, tasks, events, sleep_data, today, failed):
     """The fixed-width part: habit table and the day's schedule."""
     out = [today.strftime("%A, %-d %B"), ""]
-    if elapsed == 0:
+    if "todoist" in failed:
+        out += [f"HABITS — Todoist unreachable ({failed['todoist']})", ""]
+    elif elapsed == 0:
         out += ["HABITS", "Tracking starts today. First readout tomorrow.", ""]
     else:
         out.append(f"HABITS · last {elapsed} day{'s' if elapsed != 1 else ''}")
@@ -331,7 +342,9 @@ def render_block(rows, elapsed, tasks, events, sleep_data, today):
             )
         out.append("")
 
-    if sleep_data and not sleep_data.get("no_data"):
+    if "health" in failed:
+        out += [f"SLEEP — Google Health unreachable ({failed['health']})", ""]
+    elif sleep_data and not sleep_data.get("no_data"):
         n = sleep_data["most_recent_night"]
         when = ("last night" if n["nights_ago"] <= 1
                 else f"{n['nights_ago']} nights ago")
@@ -343,13 +356,16 @@ def render_block(rows, elapsed, tasks, events, sleep_data, today):
                    f"{am_pm(n['target_wake_that_night'])}")
         out.append("")
 
-    out.append("TODAY")
-    if not events:
-        out.append("Nothing on the calendar.")
-    for e in events:
-        out.append(f"{am_pm(e['time']) or 'all day':>7}  {e['title']}")
+    if "calendar" in failed:
+        out.append(f"TODAY — calendar unreachable ({failed['calendar']})")
+    else:
+        out.append("TODAY")
+        if not events:
+            out.append("Nothing on the calendar.")
+        for e in events:
+            out.append(f"{am_pm(e['time']) or 'all day':>7}  {e['title']}")
 
-    if tasks:
+    if tasks and "todoist" not in failed:
         out += ["", "TO DO"]
         for t in tasks:
             when = am_pm(t["time"]) or ("late" if t["overdue"] else "·")
@@ -368,32 +384,59 @@ def send(text):
 
 def main():
     load_env()
+    dry = "--dry-run" in sys.argv
     habits = json.loads((ROOT / "habits.json").read_text())
     token = os.environ["TODOIST_TOKEN"]
     con = db()
-    backfill(con, token)
     today = datetime.now(TZ).date()
-    rows, elapsed = stats(con, habits, today)
-    tasks = today_tasks(token, habits, today)
-    events = gcal.events_on(
-        os.environ.get("GOOGLE_CALENDAR_ICS", "").split(","), today, TZ)
+    failed = {}
+
+    def log(msg):
+        print(msg, file=sys.stderr)
+
+    # Each source retries on its own. Whatever still fails is named in the
+    # message rather than papered over with yesterday's numbers.
+    rows, elapsed, tasks = [], 0, []
+    try:
+        backfill(con, token, log=log)
+        rows, elapsed = stats(con, habits, today)
+        tasks = today_tasks(token, habits, today, log=log)
+    except Unavailable as e:
+        failed["todoist"] = str(e).split(": ", 1)[-1]
+        log(f"todoist unavailable: {e}")
+
+    events = []
+    try:
+        events = gcal.events_on(
+            os.environ.get("GOOGLE_CALENDAR_ICS", "").split(","), today, TZ, log=log)
+    except Unavailable as e:
+        failed["calendar"] = str(e).split(": ", 1)[-1]
+        log(f"calendar unavailable: {e}")
+
     sleep_data = None
     if os.environ.get("GOOGLE_HEALTH_REFRESH_TOKEN"):
         try:
-            tok = sleep_mod.access_token()
+            tok = sleep_mod.access_token(log=log)
             sleep_data = sleep_mod.summarise(
-                sleep_mod.nights(today - timedelta(days=WINDOW), tok),
-                sleep_mod.resting_hr(tok), today)
-        except Exception as e:  # a dead feed must not cost you the briefing
-            print(f"sleep unavailable: {e}", file=sys.stderr)
-    # With no completed day yet every stat is zero, which reads as "you did
-    # nothing" rather than "nothing has been measured". Skip the prose.
-    skip = "--no-prose" in sys.argv or elapsed == 0
-    prose = None if skip else narrate(rows, elapsed, tasks, events, sleep_data)
-    block = render_block(rows, elapsed, tasks, events, sleep_data, today)
-    if "--dry-run" in sys.argv:
+                sleep_mod.nights(today - timedelta(days=WINDOW), tok, log=log),
+                sleep_mod.resting_hr(tok, log=log), today)
+        except Unavailable as e:
+            failed["health"] = str(e).split(": ", 1)[-1]
+            log(f"health unavailable: {e}")
+
+    skip = "--no-prose" in sys.argv or (elapsed == 0 and "todoist" not in failed)
+    prose = None
+    if not skip:
+        try:
+            prose = narrate(rows, elapsed, tasks, events, sleep_data, failed)
+        except Unavailable as e:
+            log(f"narration unavailable: {e}")
+
+    block = render_block(rows, elapsed, tasks, events, sleep_data, today, failed)
+    if dry:
         print("\n\n".join(x for x in (prose, block) if x))
         return
+
     # Prose is plain text so it reflows; the table needs fixed width.
     head = escape(prose) + "\n\n" if prose else ""
     table = "<pre>" + escape(block) + "</pre>"
@@ -402,7 +445,11 @@ def main():
     else:
         # Two messages rather than a truncated one.
         parts = [p for p in (head.strip(), table) if p]
-    print("sent" if all(send(p).get("ok") for p in parts) else "FAILED")
+    try:
+        print("sent" if all(send(p).get("ok") for p in parts) else "FAILED")
+    except Unavailable as e:
+        log(f"telegram unavailable: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

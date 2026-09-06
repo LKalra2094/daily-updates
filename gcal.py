@@ -7,15 +7,19 @@ the given day?
 """
 
 import urllib.request
+
+from retry import retry
 from datetime import date, datetime, timedelta, timezone
 
 WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
 
 
-def fetch(url, timeout=300):
-    req = urllib.request.Request(url, headers={"User-Agent": "healthy-life/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
+def fetch(url, timeout=300, log=None):
+    def once():
+        req = urllib.request.Request(url, headers={"User-Agent": "healthy-life/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", "replace")
+    return retry(once, "calendar feed", log=log)
 
 
 def unfold(text):
@@ -155,14 +159,10 @@ def occurs_on(ev, target, tz):
     return slot
 
 
-def events_on(urls, target, tz):
+def events_on(urls, target, tz, log=None):
     out, seen = [], set()
     for url in [u.strip() for u in urls if u.strip()]:
-        try:
-            events = parse_events(fetch(url))
-        except Exception as e:  # a dead feed must not cost you the briefing
-            print(f"calendar feed failed: {e}")
-            continue
+        events = parse_events(fetch(url, log=log))
         for ev in events:
             slot = occurs_on(ev, target, tz)
             if slot is None:

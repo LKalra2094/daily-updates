@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
+from retry import retry
+
 BASE = "https://health.googleapis.com/v4"
 FAMILY = "users/me/dataSourceFamilies/google-wearables"
 
@@ -23,15 +25,17 @@ TARGET_BED_WEEKEND = "00:00"
 TARGET_WAKE_WEEKEND = "08:00"
 
 
-def access_token():
+def access_token(log=None):
     body = urllib.parse.urlencode({
         "client_id": os.environ["GOOGLE_HEALTH_CLIENT_ID"],
         "client_secret": os.environ["GOOGLE_HEALTH_CLIENT_SECRET"],
         "refresh_token": os.environ["GOOGLE_HEALTH_REFRESH_TOKEN"],
         "grant_type": "refresh_token",
     }).encode()
-    req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body)
-    return json.load(urllib.request.urlopen(req, timeout=300))["access_token"]
+    def once():
+        req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body)
+        return json.load(urllib.request.urlopen(req, timeout=300))["access_token"]
+    return retry(once, "google health token", log=log)
 
 
 def _dt(block, which):
@@ -41,7 +45,7 @@ def _dt(block, which):
     return t.astimezone(timezone(timedelta(seconds=offset)))
 
 
-def nights(since, token=None):
+def nights(since, token=None, log=None):
     """Sleep sessions ending on or after `since` (a date), newest first."""
     token = token or access_token()
     q = urllib.parse.urlencode({
@@ -52,7 +56,8 @@ def nights(since, token=None):
         f"{BASE}/users/me/dataTypes/sleep/dataPoints:reconcile?{q}",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
-    data = json.load(urllib.request.urlopen(req, timeout=300))
+    data = retry(lambda: json.load(urllib.request.urlopen(req, timeout=300)),
+                 "sleep", log=log)
 
     out = []
     for point in data.get("dataPoints", []):
@@ -86,7 +91,7 @@ def nights(since, token=None):
     return out
 
 
-def resting_hr(token=None):
+def resting_hr(token=None, log=None):
     """Daily resting heart rate. Google derives it from sleep, so it is the
     sleeping-HR figure rather than a daytime average."""
     token = token or access_token()
@@ -95,7 +100,8 @@ def resting_hr(token=None):
         f"{BASE}/users/me/dataTypes/daily-resting-heart-rate/dataPoints:reconcile?{q}",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
-    data = json.load(urllib.request.urlopen(req, timeout=300))
+    data = retry(lambda: json.load(urllib.request.urlopen(req, timeout=300)),
+                 "resting heart rate", log=log)
     out = []
     for point in data.get("dataPoints", []):
         r = point.get("dailyRestingHeartRate") or {}
