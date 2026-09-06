@@ -1,0 +1,5 @@
+[
+  {"todoist": "Gym / fitness", "label": "Gym",       "kind": "do",    "target_per_week": 5, "target_max": 6},
+  {"todoist": "Meditation",    "label": "Meditation", "kind": "do",    "target_per_week": 3},
+  {"todoist": "No Junk Food",  "label": "Junk food",  "kind": "avoid", "target_per_week": 7}
+]

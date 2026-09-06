@@ -1,0 +1,10 @@
+# Credentials
+.env
+*.env
+
+# Personal: habit history and the habit list itself
+habits.db
+*.db
+habits.json
+
+__pycache__/
