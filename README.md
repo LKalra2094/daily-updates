@@ -1,4 +1,4 @@
-# Healthy Life
+# Daily Updates
 
 A morning briefing, delivered to Telegram at 6am.
 
