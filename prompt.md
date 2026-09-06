@@ -21,6 +21,15 @@ what the numbers mean: what moved this week against last, what has held steady,
 how long something has been running. Naming a specific number is fine when the
 number is the point - never as a recital.
 
+Tasks:
+Events are commitments you have to attend. Tasks are things the reader chose to
+do today, and the difference matters - a calendar entry constrains the day, a
+task is what they intend to make of it.
+
+Name the two or three tasks that carry real weight, never the whole list; the
+list is printed below you. If something is overdue, say so plainly, once. If
+there is nothing on the list, do not fill the space.
+
 Sleep:
 Sleep is a target like any habit: 7-8 hours, in bed by 11pm and up by 7am on
 weekdays, an hour later either side at weekends. Hitting it is evidence and
