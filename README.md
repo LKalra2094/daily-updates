@@ -2,7 +2,7 @@
 
 A morning briefing, delivered to Telegram at 6am.
 
-Habits are logged as recurring tasks in Todoist. Sleep comes off a Fitbit.
+Habits are logged through a separate habits bot. Sleep comes off a Fitbit.
 Every morning a cron job on a small VM reads what happened, measures it against
 targets, pulls the day's calendar, and asks a language model to write a short
 paragraph about what the record shows. The paragraph is the briefing; the tables
@@ -41,7 +41,7 @@ degrade the briefing rather than cancel it.
 | `authorize.py` | One-time OAuth flow to mint the Google Health refresh token |
 | `habits.json` | Habits and their weekly targets (not in git - see `habits.example.json`) |
 | `prompt.md` | The voice. Edit this, not the code |
-| `habits.db` | SQLite completion history (not in git) |
+| `habits.db` | Not here - owned by the habits bot, path set by `HABITS_DB` |
 | `.env` | Credentials (not in git) |
 
 ## Running
@@ -60,11 +60,12 @@ was broken, and the target is zero.
 
 ## Sources
 
-**Todoist** - the activity log at `/api/v1/activities`. Recurring completions
-never appear in the completed-tasks endpoints (completing a recurring task just
-advances its due date), so the activity log is the only source that records
-them. The free tier keeps one week of activity, so each run backfills 7 days
-into local SQLite, which is the permanent record.
+**Habits** - a SQLite file written by [habits-bot](https://github.com/LKalra2094/habits-bot),
+opened read-only here. Habits were originally recurring Todoist tasks, but a
+missed day leaves one overdue task rather than a new instance per day, so there
+was no way to log a day you did it after days you didn't.
+
+**Todoist** - now only today's tasks, for the TO DO block.
 
 **Google Calendar** - the calendar's *secret iCal address*, fetched directly. No
 OAuth. Recurrence rules are not expanded into a series; `occurs_on` answers only

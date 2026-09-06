@@ -96,6 +96,17 @@ app fixes it.
 Google computes daily resting heart rate *from sleep*, so it is a sleeping-HR
 figure rather than a daytime average - which is the more useful of the two.
 
+## Habits left Todoist
+
+Recurring Todoist tasks looked ideal: you already tap them, and completions are
+real events. But a missed day does not create a new instance - the task simply
+goes overdue. Miss three days and there is one task, three days late, completable
+once. There is no way to record "did it today, not the two days before".
+
+Habits moved to a separate bot with its own evening message and its own Telegram
+identity. It owns the database; this reads it. Todoist kept the thing it is good
+at, which is tasks.
+
 ## Not built yet
 
 - A weekly edition: same data, longer window, deep and REM trends that need a
@@ -103,4 +114,4 @@ figure rather than a daytime average - which is the more useful of the two.
 - A standing intention - one line written on Sunday, echoed each morning. Highest
   value for the least work, since it needs no integration at all.
 - People cadence: recurring "call X" tasks already produce the right data.
-- Two-way - replying to the briefing to log or note something.
+- Two-way on the briefing itself - replying to log or note something.

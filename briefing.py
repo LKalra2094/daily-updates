@@ -28,7 +28,7 @@ import sleep as sleep_mod
 from retry import Unavailable, retry
 
 ROOT = Path(__file__).resolve().parent
-DB = ROOT / "habits.db"
+DEFAULT_DB = ROOT / "habits.db"
 TZ = ZoneInfo("America/Los_Angeles")
 WINDOW = 30
 TELEGRAM_LIMIT = 4096  # hard cap on a single Bot API message
@@ -66,67 +66,24 @@ def http(url, token=None, data=None, headers=None, timeout=300,
 
 
 def db():
-    con = sqlite3.connect(DB)
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS completions ("
-        "  day TEXT NOT NULL, habit TEXT NOT NULL, PRIMARY KEY (day, habit))"
-    )
-    con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
-    return con
+    """The habits bot owns this file. Opened read-only so that stays true.
+
+    Resolved at call time, not import time - the path comes from .env.
+    """
+    path = os.environ.get("HABITS_DB") or DEFAULT_DB
+    # The path can contain spaces, so it has to be URI-escaped.
+    return sqlite3.connect(f"file:{urllib.parse.quote(str(path))}?mode=ro",
+                           uri=True)
 
 
 # ---------------------------------------------------------------- todoist
-
-def backfill(con, token, days=7, log=None):
-    """Pull recent completions from the Todoist activity log.
-
-    Recurring tasks never appear in the completed-tasks endpoints - completing
-    one just advances its due date - so the activity log is the only source
-    that records them.
-    """
-    cutoff = (datetime.now(TZ).date() - timedelta(days=days)).isoformat()
-    cursor, stored = None, 0
-    for _ in range(20):
-        params = {"limit": 100}
-        if cursor:
-            params["cursor"] = cursor
-        data = http(
-            "https://api.todoist.com/api/v1/activities?" + urllib.parse.urlencode(params),
-            token, what="todoist activity", log=log,
-        )
-        results = data.get("results", [])
-        if not results:
-            break
-        for r in results:
-            day = (
-                datetime.fromisoformat(r["event_date"].replace("Z", "+00:00"))
-                .astimezone(TZ).date().isoformat()
-            )
-            if day < cutoff:
-                con.commit()
-                return stored
-            if r.get("event_type") != "completed":
-                continue
-            content = (r.get("extra_data") or {}).get("content")
-            if content:
-                con.execute(
-                    "INSERT OR IGNORE INTO completions (day, habit) VALUES (?, ?)",
-                    (day, content),
-                )
-                stored += 1
-        cursor = data.get("next_cursor")
-        if not cursor:
-            break
-    con.commit()
-    return stored
-
 
 def today_tasks(token, habits, today, log=None):
     """Everything due today that is not one of the habits."""
     data = http("https://api.todoist.com/api/v1/tasks", token,
                 what="todoist tasks", log=log)
     tasks = data.get("results", data)
-    habit_names = {h["todoist"] for h in habits}
+    habit_names = {h["key"] for h in habits}
     habit_projects = {
         t.get("project_id") for t in tasks if t.get("content") in habit_names
     }
@@ -139,8 +96,6 @@ def today_tasks(token, habits, today, log=None):
         day = raw[:10]
         if day > today.isoformat():
             continue  # future
-        if t.get("content") in habit_names or t.get("project_id") in habit_projects:
-            continue
         at = raw[11:16] if len(raw) > 10 else None
         out.append({
             "title": t.get("content"),
@@ -172,7 +127,7 @@ def stats(con, habits, today):
     for h in habits:
         logged = con.execute(
             "SELECT COUNT(*) FROM completions WHERE habit=? AND day>=? AND day<?",
-            (h["todoist"], window_start.isoformat(), today.isoformat()),
+            (h["key"], window_start.isoformat(), today.isoformat()),
         ).fetchone()[0]
         if h["kind"] == "avoid":
             # Target is a clean day every day; what matters is lapses.
@@ -201,7 +156,7 @@ def trend(con, h, today, window_start):
     def count(a, b):
         return con.execute(
             "SELECT COUNT(*) FROM completions WHERE habit=? AND day>=? AND day<?",
-            (h["todoist"], a.isoformat(), b.isoformat()),
+            (h["key"], a.isoformat(), b.isoformat()),
         ).fetchone()[0]
 
     days, d = [], window_start
@@ -219,7 +174,7 @@ def trend(con, h, today, window_start):
     else:
         row = con.execute(
             "SELECT MAX(day) FROM completions WHERE habit=? AND day<?",
-            (h["todoist"], today.isoformat()),
+            (h["key"], today.isoformat()),
         ).fetchone()[0]
         if row:
             out["days_since_last"] = (today - date.fromisoformat(row)).days
@@ -325,8 +280,8 @@ def am_pm(hhmm):
 def render_block(rows, elapsed, tasks, events, sleep_data, today, failed):
     """The fixed-width part: habit table and the day's schedule."""
     out = [today.strftime("%A, %-d %B"), ""]
-    if "todoist" in failed:
-        out += [f"HABITS — Todoist unreachable ({failed['todoist']})", ""]
+    if "habits" in failed:
+        out += [f"HABITS — database unreadable ({failed['habits']})", ""]
     elif elapsed == 0:
         out += ["HABITS", "Tracking starts today. First readout tomorrow.", ""]
     else:
@@ -365,7 +320,7 @@ def render_block(rows, elapsed, tasks, events, sleep_data, today, failed):
         for e in events:
             out.append(f"{am_pm(e['time']) or 'all day':>7}  {e['title']}")
 
-    if tasks and "todoist" not in failed:
+    if tasks:
         out += ["", "TO DO"]
         for t in tasks:
             when = am_pm(t["time"]) or ("late" if t["overdue"] else "·")
@@ -396,10 +351,15 @@ def main():
 
     # Each source retries on its own. Whatever still fails is named in the
     # message rather than papered over with yesterday's numbers.
-    rows, elapsed, tasks = [], 0, []
+    rows, elapsed = [], 0
     try:
-        backfill(con, token, log=log)
         rows, elapsed = stats(con, habits, today)
+    except sqlite3.Error as e:
+        failed["habits"] = str(e)
+        log(f"habits database unreadable: {e}")
+
+    tasks = []
+    try:
         tasks = today_tasks(token, habits, today, log=log)
     except Unavailable as e:
         failed["todoist"] = str(e).split(": ", 1)[-1]
@@ -424,7 +384,7 @@ def main():
             failed["health"] = str(e).split(": ", 1)[-1]
             log(f"health unavailable: {e}")
 
-    skip = "--no-prose" in sys.argv or (elapsed == 0 and "todoist" not in failed)
+    skip = "--no-prose" in sys.argv or (elapsed == 0 and "habits" not in failed)
     prose = None
     if not skip:
         try:
