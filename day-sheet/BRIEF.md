@@ -41,12 +41,70 @@ Already computed and working in `daily-updates/`:
 - **Habits still owed this week**, from the habits bot's database (`plan.py`)
 
 Still to add, and the part that makes this personal rather than generic:
+the lifestyle file below.
 
-- **Lifestyle rules.** Eat about four hours before sleeping. Finish the gym
-  about three hours before sleeping. Others to be collected. Some are general
-  health practice, some are specific to this reader.
-- **Week shape** already exists in `week.json` (office Mon-Thu 7-5, Friday
-  home by 3, weekends open, gym 90 minutes usually in the evening).
+**Week shape** already exists in `week.json` (office Mon-Thu 7-5, Friday home by
+3, weekends open, gym 90 minutes usually in the evening).
+
+## The lifestyle file
+
+Not rules so much as things worth knowing about the reader. Some are general
+health practice, most are specific. This list is where the quality of the plan
+actually comes from, and it should keep growing.
+
+**Sleep and meals**
+- Eat about four hours before sleeping.
+- Finish the gym about three hours before sleeping.
+
+**The gym** takes an hour and a half, door to door. Usually the evening.
+
+**Coming home from the office.** Home at five, and tired until about twenty past.
+Something light can go in that slot, but not the hardest thing of the day.
+
+**Watching F1.** Sessions before 10am are almost never watched live - the reader
+wakes around eight or nine and watches somewhere in the nine-to-twelve stretch.
+A session at 10am or later is watched at its actual time. So a 6am race does not
+block 6am; it blocks a couple of hours of the late morning. The planner should
+place it accordingly rather than treating the broadcast time as fixed.
+
+**Drinking.** Some events are known in advance to involve drinking, and nothing
+physical should be scheduled after one. See event context below.
+
+## Event context: descriptions and tags
+
+`gcal.py` already parses every property of a VEVENT into a dict, so
+`DESCRIPTION` is available and simply is not carried through `events_on`. Two
+lines to expose it.
+
+Two mechanisms, because there are two different needs:
+
+**Free text in the event description**, read by the model as context. "Likely a
+late one", "bring the gym kit, going straight after", "dinner is at the
+restaurant". Flexible, lives with the event, nothing to remember.
+
+**Tags for hard constraints**, enforced in Python. `#drinks` in the title or
+description means nothing physical is scheduled after that event that day. This
+is a rule, not a nuance, and rules belong in code where they cannot be
+forgotten - the same line drawn everywhere else here. Start with `#drinks` and
+add tags only when a genuine constraint appears.
+
+## The evening session
+
+A separate short thing, perhaps twenty minutes, late at night. Its job is to
+decide what tomorrow is actually about.
+
+The problem it solves: Todoist may hold a hundred tasks, and nothing in the data
+says which three matter tomorrow. Due dates are a weak proxy - they say when
+something was planned, not what is important. Without this step the morning
+planner is guessing, and the plan is only as good as the guess.
+
+Shape is undecided. It could be a conversation, or a review of tomorrow's
+candidates where a few get promoted, or simply a line written by hand. What it
+must produce is an intention for tomorrow that the morning job reads before it
+plans anything.
+
+It also pairs naturally with the evening sync in step 5 - what got done, then
+what matters next.
 
 ## Non-negotiable: the model plans, it never computes
 
@@ -165,6 +223,10 @@ still in use in a month.
 
 **5. Evening sync.** A mechanical job that closes ticked tasks in Todoist.
 Complete only, never reschedule.
+
+**6. The evening session.** Twenty minutes at night that sets tomorrow's
+intention, so the morning planner is not guessing which of a hundred tasks
+matter. Pairs with step 5 - what got done, then what matters next.
 
 The 7:30 email stays exactly as it is until the page replaces it.
 
