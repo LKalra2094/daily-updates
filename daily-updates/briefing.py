@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Morning briefing.
 
-Modules, in the order they appear in the message:
-  prose   - Gemini narrates the verified stats below it
-  habits  - performance against weekly targets, from the Todoist activity log
-  sleep   - last night against target, from Google Health (Fitbit)
-  today   - calendar events (Google iCal feed) and Todoist tasks due
+Two messages, two mindsets:
+
+  habits  - 6:30, to Telegram. Who you have been: performance against weekly
+            targets from the habits bot's database, and last night's sleep from
+            Google Health. Strategic. Read in bed.
+  tasks   - 7:30, by email. What today asks of you: calendar, Todoist, F1
+            sessions, and the free windows left once those are subtracted.
+            Operational. Read standing up.
 
 Every number is computed here. The model only ever writes prose over numbers it
 was handed.
@@ -23,7 +26,9 @@ from html import escape
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import f1
 import gcal
+import plan
 import sleep as sleep_mod
 from retry import Unavailable, retry
 
@@ -80,7 +85,14 @@ def db():
 
 def today_tasks(token, today, log=None):
     """Everything due today or overdue. Habits are not here; they live in the
-    habits bot's database, so nothing needs filtering out."""
+    habits bot's database, so nothing needs filtering out.
+
+    `note` is Todoist's `description`, the text written on the task itself.
+    `deadline` is a separate field from `due` - due is when it was planned,
+    deadline is when it is actually owed - and is carried only when the two
+    disagree. `postponed` counts how many times it has been pushed, which is a
+    better measure of a task being avoided than merely being late.
+    """
     data = http("https://api.todoist.com/api/v1/tasks", token,
                 what="todoist tasks", log=log)
     tasks = data.get("results", data)
@@ -94,10 +106,21 @@ def today_tasks(token, today, log=None):
         if day > today.isoformat():
             continue  # future
         at = raw[11:16] if len(raw) > 10 else None
+        deadline = (t.get("deadline") or {}).get("date")
+        dur = t.get("duration") or {}
+        amount = dur.get("amount")
         out.append({
             "title": t.get("content"),
             "time": at,
             "overdue": day < today.isoformat(),
+            "days_late": (today - date.fromisoformat(day)).days,
+            "note": (t.get("description") or "").strip() or None,
+            "deadline": deadline if deadline and deadline != day else None,
+            "minutes": (amount if dur.get("unit") == "minute"
+                        else amount * 60 if amount else None),
+            "postponed": t.get("postponed_count") or 0,
+            "labels": t.get("labels") or None,
+            "recurring": bool(due.get("is_recurring")),
         })
     out.sort(key=lambda x: (x["time"] is None, x["time"] or ""))
     return out
@@ -188,11 +211,9 @@ def target_str(h):
 
 # ---------------------------------------------------------------- prose
 
-def narrate(rows, elapsed, tasks, events, sleep_data, failed):
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        return None
-    facts = {
+def facts_habits(rows, elapsed, sleep_data, failed):
+    """What the 6:30 message reasons over: the record, and last night."""
+    return {
         "days_of_history": elapsed,
         "how_to_read_daily_pattern": (
             "One character per day, oldest first, ending yesterday. "
@@ -217,19 +238,53 @@ def narrate(rows, elapsed, tasks, events, sleep_data, failed):
         ],
         "sleep": sleep_data,
         "sources_unavailable_today": failed or None,
-        "last_event_ends_today": (
-            max((e["ends"] for e in events if e.get("ends")), default=None)),
+    }
+
+
+def facts_tasks(today, events, tasks, races, slots, progress, week, failed):
+    """What the 7:30 message reasons over: the day, and the room left in it."""
+    return {
+        "today": today.strftime("%A, %-d %B"),
+        "day_shape": plan.day_note(week, today) or "nothing fixed",
+        "how_to_use_free_windows": (
+            "These are the only unclaimed stretches of today, already computed "
+            "from the calendar and the fixed week. Place work inside them. Never "
+            "invent a time outside them, and never overfill one."),
+        "free_windows": slots,
         "todays_events": [
-            {"title": e["title"], "time": am_pm(e["time"]) or "all day"}
+            {"title": e["title"], "time": am_pm(e["time"]) or "all day",
+             "ends": am_pm(e.get("ends"))}
             for e in events
         ],
+        "f1_today": [{**r, "time": am_pm(r["time"]), "ends": am_pm(r["ends"])}
+                     for r in races] or None,
+        "how_to_treat_f1": (
+            "Watched the same day but not necessarily live, so the time is "
+            "movable. Say it is on and roughly what it costs; do not schedule "
+            "the rest of the morning as though it were fixed."
+        ) if races else None,
         "todays_tasks": [
-            {"title": t["title"], "time": am_pm(t["time"]), "overdue": t["overdue"]}
+            {"title": t["title"], "time": am_pm(t["time"]),
+             **{k: t[k] for k in
+                ("note", "deadline", "minutes", "labels", "recurring")
+                if t.get(k)},
+             **({"overdue_by_days": t["days_late"]} if t["overdue"] else {}),
+             **({"times_postponed": t["postponed"]} if t["postponed"] else {})}
             for t in tasks
         ],
+        "habits_still_owed_this_week": progress or None,
+        "gym_takes_minutes": week.get("gym_minutes"),
+        "gym_usually": week.get("gym_when"),
+        "sources_unavailable_today": failed or None,
     }
+
+
+def narrate(facts, prompt):
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        return None
     payload = {
-        "systemInstruction": {"parts": [{"text": (ROOT / "prompt.md").read_text()}]},
+        "systemInstruction": {"parts": [{"text": (ROOT / prompt).read_text()}]},
         "contents": [{"role": "user",
                       "parts": [{"text": json.dumps(facts, indent=2)}]}],
         "generationConfig": {
@@ -274,8 +329,8 @@ def am_pm(hhmm):
     return f"{h12}:{m:02d}{suffix}" if m else f"{h12}{suffix}"
 
 
-def render_block(rows, elapsed, tasks, events, sleep_data, today, failed):
-    """The fixed-width part: habit table and the day's schedule."""
+def render_habits(rows, elapsed, sleep_data, today, failed):
+    """The fixed-width part of the 6:30 message: the record, and last night."""
     out = [today.strftime("%A, %-d %B"), ""]
     if "habits" in failed:
         out += [f"HABITS — database unreadable ({failed['habits']})", ""]
@@ -308,21 +363,101 @@ def render_block(rows, elapsed, tasks, events, sleep_data, today, failed):
                    f"{am_pm(n['target_wake_that_night'])}")
         out.append("")
 
-    if "calendar" in failed:
-        out.append(f"TODAY — calendar unreachable ({failed['calendar']})")
-    else:
-        out.append("TODAY")
-        if not events:
-            out.append("Nothing on the calendar.")
-        for e in events:
-            out.append(f"{am_pm(e['time']) or 'all day':>7}  {e['title']}")
-
-    if tasks:
-        out += ["", "TO DO"]
-        for t in tasks:
-            when = am_pm(t["time"]) or ("late" if t["overdue"] else "·")
-            out.append(f"{when:>7}  {t['title']}")
     return "\n".join(out).rstrip()
+
+
+# ---------------------------------------------------------------- 7:30, as email
+
+CSS = """
+body{margin:0;padding:24px 16px;background:#f6f6f4;
+     font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a}
+.wrap{max-width:560px;margin:0 auto}
+h1{font-size:19px;margin:0 0 4px;font-weight:600}
+.sub{color:#6b6b6b;font-size:14px;margin:0 0 20px}
+.prose{font-size:16px;margin:0 0 24px}
+h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#8a8a8a;
+   font-weight:600;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid #e3e3e0}
+.row{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid #ececea}
+.row:last-child{border-bottom:0}
+.when{flex:0 0 72px;color:#6b6b6b;font-variant-numeric:tabular-nums;font-size:14px}
+.what{flex:1}
+.note{color:#6b6b6b;font-size:14px;margin-top:3px}
+.tag{display:inline-block;font-size:12px;padding:1px 7px;border-radius:10px;
+     background:#ececea;color:#5a5a5a;margin-left:6px;vertical-align:1px}
+.late{background:#f6dcd8;color:#8d2b18}
+.free{background:#e2eee4;color:#26603a}
+.empty{color:#8a8a8a}
+.fail{background:#f6dcd8;color:#8d2b18;padding:9px 12px;border-radius:5px;
+      font-size:14px;margin:14px 0}
+"""
+
+
+def _rows(items):
+    return "".join(
+        f'<div class="row"><div class="when">{escape(w)}</div>'
+        f'<div class="what">{body}</div></div>'
+        for w, body in items) or '<div class="row empty">Nothing.</div>'
+
+
+def render_tasks_html(today, events, tasks, races, slots, prose, failed):
+    """The 7:30 message. Email, because this is a document, not a glance."""
+    p = [f'<style>{CSS}</style><div class="wrap">',
+         f'<h1>{escape(today.strftime("%A, %-d %B"))}</h1>',
+         '<p class="sub">What today asks of you.</p>']
+    if prose:
+        p.append(f'<p class="prose">{escape(prose)}</p>')
+    for src, label in (("todoist", "Todoist"), ("calendar", "Calendar"),
+                       ("f1", "F1 calendar")):
+        if src in failed:
+            p.append(f'<div class="fail">{label} unreachable — '
+                     f'{escape(str(failed[src]))}</div>')
+
+    if races:
+        p.append("<h2>Racing</h2>")
+        p.append(_rows([
+            (am_pm(r["time"]),
+             f'{escape(r["session"])}<span class="tag">{escape(r["race"])}</span>'
+             f'<div class="note">about {plan.span(r["minutes"])}</div>')
+            for r in races]))
+
+    if "calendar" not in failed:
+        p.append("<h2>Today</h2>")
+        p.append(_rows([(am_pm(e["time"]) or "all day", escape(e["title"]))
+                        for e in events])
+                 if events else '<div class="row empty">Nothing scheduled.</div>')
+
+    if "todoist" not in failed:
+        p.append("<h2>To do</h2>")
+        if not tasks:
+            p.append('<div class="row empty">No tasks for you today.</div>')
+        else:
+            items = []
+            for t in tasks:
+                tags = ""
+                if t["overdue"]:
+                    d = t["days_late"]
+                    tags += (f'<span class="tag late">{d} day'
+                             f'{"s" if d != 1 else ""} late</span>')
+                if t["postponed"]:
+                    tags += f'<span class="tag">moved {t["postponed"]}×</span>'
+                if t["minutes"]:
+                    tags += f'<span class="tag">{plan.span(t["minutes"])}</span>'
+                if t["deadline"]:
+                    tags += f'<span class="tag">due {escape(t["deadline"])}</span>'
+                body = escape(t["title"]) + tags
+                if t["note"]:
+                    body += f'<div class="note">{escape(t["note"])}</div>'
+                items.append((am_pm(t["time"]) or "—", body))
+            p.append(_rows(items))
+
+    if slots:
+        p.append("<h2>Free</h2>")
+        p.append(_rows([
+            (s["from"], f'until {escape(s["to"])}'
+                        f'<span class="tag free">{plan.span(s["minutes"])}</span>')
+            for s in slots]))
+    p.append("</div>")
+    return "\n".join(p)
 
 
 def send(text):
@@ -334,41 +469,24 @@ def send(text):
     )
 
 
-def main():
-    load_env()
-    dry = "--dry-run" in sys.argv
+def log(msg):
+    print(msg, file=sys.stderr)
+
+
+def run_habits(dry, prose_wanted):
+    """6:30. Who you have been, and how you slept. Strategic, not operational."""
     habits = json.loads((ROOT.parent / "habits.json").read_text())
-    token = os.environ["TODOIST_TOKEN"]
-    con = db()
     today = datetime.now(TZ).date()
     failed = {}
-
-    def log(msg):
-        print(msg, file=sys.stderr)
 
     # Each source retries on its own. Whatever still fails is named in the
     # message rather than papered over with yesterday's numbers.
     rows, elapsed = [], 0
     try:
-        rows, elapsed = stats(con, habits, today)
+        rows, elapsed = stats(db(), habits, today)
     except sqlite3.Error as e:
         failed["habits"] = str(e)
         log(f"habits database unreadable: {e}")
-
-    tasks = []
-    try:
-        tasks = today_tasks(token, today, log=log)
-    except Unavailable as e:
-        failed["todoist"] = str(e).split(": ", 1)[-1]
-        log(f"todoist unavailable: {e}")
-
-    events = []
-    try:
-        events = gcal.events_on(
-            os.environ.get("GOOGLE_CALENDAR_ICS", "").split(","), today, TZ, log=log)
-    except Unavailable as e:
-        failed["calendar"] = str(e).split(": ", 1)[-1]
-        log(f"calendar unavailable: {e}")
 
     sleep_data = None
     if os.environ.get("GOOGLE_HEALTH_REFRESH_TOKEN"):
@@ -381,33 +499,101 @@ def main():
             failed["health"] = str(e).split(": ", 1)[-1]
             log(f"health unavailable: {e}")
 
-    skip = "--no-prose" in sys.argv or (elapsed == 0 and "habits" not in failed)
     prose = None
-    if not skip:
+    if prose_wanted and not (elapsed == 0 and "habits" not in failed):
         try:
-            prose = narrate(rows, elapsed, tasks, events, sleep_data, failed)
+            prose = narrate(facts_habits(rows, elapsed, sleep_data, failed),
+                            "prompt-habits.md")
         except Unavailable as e:
             log(f"narration unavailable: {e}")
 
-    block = render_block(rows, elapsed, tasks, events, sleep_data, today, failed)
+    block = render_habits(rows, elapsed, sleep_data, today, failed)
     if dry:
         print("\n\n".join(x for x in (prose, block) if x))
-        return
+        return 0
 
     # Prose is plain text so it reflows; the table needs fixed width.
     head = escape(prose) + "\n\n" if prose else ""
     table = "<pre>" + escape(block) + "</pre>"
-    if len(head) + len(table) <= TELEGRAM_LIMIT:
-        parts = [head + table]
-    else:
-        # Two messages rather than a truncated one.
-        parts = [p for p in (head.strip(), table) if p]
+    parts = ([head + table] if len(head) + len(table) <= TELEGRAM_LIMIT
+             else [p for p in (head.strip(), table) if p])
     try:
         print("sent" if all(send(p).get("ok") for p in parts) else "FAILED")
     except Unavailable as e:
         log(f"telegram unavailable: {e}")
-        sys.exit(1)
+        return 1
+    return 0
+
+
+def run_tasks(dry, prose_wanted):
+    """7:30. What today asks of you, and where it actually fits."""
+    habits = json.loads((ROOT.parent / "habits.json").read_text())
+    week = plan.load(ROOT.parent / "week.json")
+    today = datetime.now(TZ).date()
+    failed = {}
+
+    tasks = []
+    try:
+        tasks = today_tasks(os.environ["TODOIST_TOKEN"], today, log=log)
+    except Unavailable as e:
+        failed["todoist"] = str(e).split(": ", 1)[-1]
+        log(f"todoist unavailable: {e}")
+
+    events = []
+    try:
+        events = gcal.events_on(
+            os.environ.get("GOOGLE_CALENDAR_ICS", "").split(","), today, TZ, log=log)
+    except Unavailable as e:
+        failed["calendar"] = str(e).split(": ", 1)[-1]
+        log(f"calendar unavailable: {e}")
+
+    races = []
+    try:
+        races = f1.sessions_on(today, TZ, log=log)
+    except Unavailable as e:
+        failed["f1"] = str(e).split(": ", 1)[-1]
+        log(f"f1 unavailable: {e}")
+
+    progress = []
+    try:
+        progress = plan.week_progress(db(), habits, today)
+    except sqlite3.Error as e:
+        failed["habits"] = str(e)
+        log(f"habits database unreadable: {e}")
+
+    # Free time is arithmetic over the week shape and the calendar, so it is
+    # computed here and handed over finished. The model places work in it.
+    targets = sleep_mod.targets_for(today)
+    slots = plan.free_slots(week, today, events, targets["wake"], targets["bed"])
+
+    prose = None
+    if prose_wanted:
+        try:
+            prose = narrate(
+                facts_tasks(today, events, tasks, races, slots, progress,
+                            week, failed),
+                "prompt-tasks.md")
+        except Unavailable as e:
+            log(f"narration unavailable: {e}")
+
+    html = render_tasks_html(today, events, tasks, races, slots, prose, failed)
+    if dry:
+        print(html)
+        return 0
+    log("email sender not configured yet")
+    return 1
+
+
+def main():
+    load_env()
+    mode = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
+    if mode not in ("habits", "tasks"):
+        print("usage: briefing.py habits|tasks [--dry-run] [--no-prose]",
+              file=sys.stderr)
+        return 2
+    runner = run_habits if mode == "habits" else run_tasks
+    return runner("--dry-run" in sys.argv, "--no-prose" not in sys.argv)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

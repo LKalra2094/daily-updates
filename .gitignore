@@ -13,3 +13,4 @@ __pycache__/
 .auth_result
 .run.log
 .run.pid
+week.json

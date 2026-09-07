@@ -1,0 +1,15 @@
+{
+  "days": {
+    "mon": {"busy": [["07:00", "17:00"]], "note": "office"},
+    "tue": {"busy": [["07:00", "17:00"]], "note": "office"},
+    "wed": {"busy": [["07:00", "17:00"]], "note": "office"},
+    "thu": {"busy": [["07:00", "17:00"]], "note": "office"},
+    "fri": {"busy": [["07:00", "15:00"]], "note": "work from home, free by 3pm"},
+    "sat": {"busy": [], "note": null},
+    "sun": {"busy": [], "note": null}
+  },
+  "leave_home": "08:30",
+  "home_by": "17:00",
+  "gym_minutes": 90,
+  "gym_when": "evening"
+}
