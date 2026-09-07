@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""One-time OAuth: mint a refresh token for the Google Health API."""
+"""One-time OAuth: mint a refresh token.
+
+    python3 authorize.py health   sleep and resting heart rate
+    python3 authorize.py gmail    sending the 7:30 message
+
+Two separate grants against two separate client ids. Bundling gmail.send onto
+the health token would mean re-running that consent, and re-consenting a working
+service to add an unrelated scope is how a working service stops working.
+"""
 
 import http.server
 import json
@@ -13,19 +21,40 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PORT = 8765
-SCOPE = " ".join([
-    "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
-    "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
-])
 REDIRECT = f"http://localhost:{PORT}"
+GRANTS = {
+    "health": {
+        "prefix": "GOOGLE_HEALTH",
+        "scope": " ".join([
+            "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
+            "https://www.googleapis.com/auth/googlehealth."
+            "health_metrics_and_measurements.readonly",
+        ]),
+    },
+    "gmail": {
+        "prefix": "GMAIL",
+        "scope": "https://www.googleapis.com/auth/gmail.send",
+    },
+}
+
+which = sys.argv[1] if len(sys.argv) > 1 else ""
+if which not in GRANTS:
+    print(f"usage: authorize.py {'|'.join(GRANTS)}")
+    sys.exit(2)
+grant = GRANTS[which]
+SCOPE = grant["scope"]
+PREFIX = grant["prefix"]
 
 for line in (ROOT.parent / ".env").read_text().splitlines():
     if line.strip() and not line.startswith("#") and "=" in line:
         k, v = line.split("=", 1)
         os.environ.setdefault(k.strip(), v.strip())
 
-CLIENT_ID = os.environ["GOOGLE_HEALTH_CLIENT_ID"]
-CLIENT_SECRET = os.environ["GOOGLE_HEALTH_CLIENT_SECRET"]
+# One client can back both grants; only the refresh tokens differ.
+CLIENT_ID = (os.environ.get(f"{PREFIX}_CLIENT_ID")
+             or os.environ["GOOGLE_HEALTH_CLIENT_ID"])
+CLIENT_SECRET = (os.environ.get(f"{PREFIX}_CLIENT_SECRET")
+                 or os.environ["GOOGLE_HEALTH_CLIENT_SECRET"])
 
 auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
     "client_id": CLIENT_ID,
@@ -80,8 +109,10 @@ if "refresh_token" not in tok:
     sys.exit(1)
 
 env = (ROOT.parent / ".env").read_text()
-env = re.sub(r"^GOOGLE_HEALTH_REFRESH_TOKEN=.*$",
-             "GOOGLE_HEALTH_REFRESH_TOKEN=" + tok["refresh_token"],
-             env, flags=re.M)
+key = f"{PREFIX}_REFRESH_TOKEN"
+if re.search(rf"^{key}=", env, flags=re.M):
+    env = re.sub(rf"^{key}=.*$", f"{key}=" + tok["refresh_token"], env, flags=re.M)
+else:
+    env = env.rstrip("\n") + f"\n{key}=" + tok["refresh_token"] + "\n"
 (ROOT.parent / ".env").write_text(env)
 print("OK: refresh token saved. granted scope:", tok.get("scope"))

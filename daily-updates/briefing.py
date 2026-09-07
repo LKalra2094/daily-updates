@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 import f1
 import gcal
+import mail
 import plan
 import sleep as sleep_mod
 from retry import Unavailable, retry
@@ -580,8 +581,14 @@ def run_tasks(dry, prose_wanted):
     if dry:
         print(html)
         return 0
-    log("email sender not configured yet")
-    return 1
+    subject = today.strftime("%A, %-d %B")
+    try:
+        mail.send(os.environ["MAIL_TO"], subject, html, log=log)
+        print("sent")
+    except (Unavailable, KeyError) as e:
+        log(f"mail unavailable: {e}")
+        return 1
+    return 0
 
 
 def main():
