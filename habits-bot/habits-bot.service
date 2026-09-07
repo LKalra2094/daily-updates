@@ -1,0 +1,17 @@
+[Unit]
+Description=Habits bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/healthy-life/habits-bot
+ExecStart=/usr/bin/python3 /home/ubuntu/healthy-life/habits-bot/bot.py run
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

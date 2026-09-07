@@ -19,7 +19,7 @@ SCOPE = " ".join([
 ])
 REDIRECT = f"http://localhost:{PORT}"
 
-for line in (ROOT / ".env").read_text().splitlines():
+for line in (ROOT.parent / ".env").read_text().splitlines():
     if line.strip() and not line.startswith("#") and "=" in line:
         k, v = line.split("=", 1)
         os.environ.setdefault(k.strip(), v.strip())
@@ -79,9 +79,9 @@ if "refresh_token" not in tok:
     print("NO REFRESH TOKEN:", json.dumps(tok)[:400])
     sys.exit(1)
 
-env = (ROOT / ".env").read_text()
+env = (ROOT.parent / ".env").read_text()
 env = re.sub(r"^GOOGLE_HEALTH_REFRESH_TOKEN=.*$",
              "GOOGLE_HEALTH_REFRESH_TOKEN=" + tok["refresh_token"],
              env, flags=re.M)
-(ROOT / ".env").write_text(env)
+(ROOT.parent / ".env").write_text(env)
 print("OK: refresh token saved. granted scope:", tok.get("scope"))

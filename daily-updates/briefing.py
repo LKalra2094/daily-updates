@@ -28,7 +28,7 @@ import sleep as sleep_mod
 from retry import Unavailable, retry
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_DB = ROOT / "habits.db"
+DEFAULT_DB = ROOT.parent / "habits-bot" / "habits.db"
 TZ = ZoneInfo("America/Los_Angeles")
 WINDOW = 30
 TELEGRAM_LIMIT = 4096  # hard cap on a single Bot API message
@@ -41,7 +41,7 @@ GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
 # ---------------------------------------------------------------- plumbing
 
 def load_env():
-    for line in (ROOT / ".env").read_text().splitlines():
+    for line in (ROOT.parent / ".env").read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
@@ -337,7 +337,7 @@ def send(text):
 def main():
     load_env()
     dry = "--dry-run" in sys.argv
-    habits = json.loads((ROOT / "habits.json").read_text())
+    habits = json.loads((ROOT.parent / "habits.json").read_text())
     token = os.environ["TODOIST_TOKEN"]
     con = db()
     today = datetime.now(TZ).date()

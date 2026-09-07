@@ -11,3 +11,5 @@ __pycache__/
 
 .auth_url
 .auth_result
+.run.log
+.run.pid

@@ -1,112 +1,49 @@
-# Daily Updates
+# Healthy Life
 
-A morning briefing, delivered to Telegram at 6am.
+Two programs that share one habit list.
 
-Habits are logged through a separate habits bot. Sleep comes off a Fitbit.
-Every morning a cron job on a small VM reads what happened, measures it against
-targets, pulls the day's calendar, and asks a language model to write a short
-paragraph about what the record shows. The paragraph is the briefing; the tables
-underneath are the evidence.
+**`habits-bot/`** sends a Telegram message every evening at 8pm with one button
+per habit. Tapping a button records that habit for the day the message belongs
+to, so scrolling back to an older evening repairs an older day.
 
-## Design
+**`daily-updates/`** sends a different Telegram message at 6am. It reads the
+habit history, measures it against weekly targets, adds last night's sleep and
+today's calendar, and asks a language model to write a short paragraph about
+what the record shows.
 
-**Every number is computed in Python.** The model receives finished statistics
-and writes prose over them - it never does arithmetic, and it is told explicitly
-that it may not state a figure it was not given. If the model is unreachable the
-briefing still sends, without the paragraph.
+The evening half records. The morning half reflects it back.
 
-**Targets, not raw rates.** A once-a-week habit done once a week is met, not 14%
-complete. Streaks were deliberately rejected: one missed day zeroing a month is
-the opposite of evidence.
+## The two contracts between them
 
-**No week-sized buckets.** The model is handed the raw 30-day daily pattern per
-habit - one character a day, `X` or `-` - and finds the trend itself rather than
-being fed a this-week-vs-last-week comparison.
+**`habits.json` at the repo root is the single source of truth for what a habit
+is.** Both halves read it. The bot uses `key` and `label` to draw the buttons;
+the briefing also reads `kind`, `target_per_week` and `target_max` to measure
+against. Each half ignores the fields it does not need. There is one list, so a
+habit cannot be renamed in one place and not the other.
 
-**Sleep is a target, not an excuse.** Missing it never produces advice to do less
-today. It produces a concrete bedtime for tonight, read off when the last
-calendar event ends.
+**`habits-bot/habits.db` is written only by the bot.** The briefing opens it
+read-only, by URI, and knows nothing about the bot process - not whether it is
+running, not how it writes. Two writers on one SQLite file is the failure mode
+this avoids.
 
-**Nothing is allowed to cost the morning message.** Every external call is
-wrapped; a dead calendar feed, a 503 from the model, an expired health token all
-degrade the briefing rather than cancel it.
+Neither file is in git. `habits.json` is personal; `habits.db` is history.
+Copy `habits.example.json` to `habits.json` to start.
 
 ## Layout
 
-| File | Role |
+| Path | Role |
 |---|---|
-| `briefing.py` | Fetch, store, compute, render, send |
-| `gcal.py` | Google Calendar iCal feeds; answers "does this event fall today" |
-| `sleep.py` | Google Health API: sleep stages and resting heart rate |
-| `authorize.py` | One-time OAuth flow to mint the Google Health refresh token |
-| `habits.json` | Habits and their weekly targets (not in git - see `habits.example.json`) |
-| `prompt.md` | The voice. Edit this, not the code |
-| `habits.db` | Not here - owned by the habits bot, path set by `HABITS_DB` |
-| `.env` | Credentials (not in git) |
+| `habits.json` | The habit list, shared (not in git - see `habits.example.json`) |
+| `.env` | Every credential for both halves (not in git) |
+| `habits-bot/` | The evening bot; owns `habits.db` |
+| `daily-updates/` | The morning briefing; reads `habits.db` |
+| `DECISIONS.md` | Why it is built this way, including the paths not taken |
 
-## Running
+Each half has its own README covering its setup and how it runs.
 
-```sh
-python3 briefing.py --dry-run    # print, send nothing
-python3 briefing.py --no-prose   # skip the model
-python3 briefing.py              # send
-```
-
-Python standard library only - no dependencies to install.
-
-Copy `habits.example.json` to `habits.json` and set your own habits and weekly
-targets. `kind: "avoid"` inverts the metric - the number becomes days the habit
-was broken, and the target is zero.
-
-## Sources
-
-**Habits** - a SQLite file written by [habits-bot](https://github.com/LKalra2094/habits-bot),
-opened read-only here. Habits were originally recurring Todoist tasks, but a
-missed day leaves one overdue task rather than a new instance per day, so there
-was no way to log a day you did it after days you didn't.
-
-**Todoist** - now only today's tasks, for the TO DO block.
-
-**Google Calendar** - the calendar's *secret iCal address*, fetched directly. No
-OAuth. Recurrence rules are not expanded into a series; `occurs_on` answers only
-whether a given event falls on a given day.
-
-**Google Health API** (`health.googleapis.com/v4`) - sleep and resting heart
-rate. This replaces the Fitbit Web API, retired September 2026. Google computes
-daily resting heart rate *from sleep*, so it is a sleeping-HR figure rather than
-a daytime average.
-
-**Gemini** free tier writes the paragraph, with a fallback chain across models.
-**Telegram** Bot API delivers it, splitting at 4096 characters.
-
-## Google Health setup
-
-Needed once, and only for sleep. Everything else uses a plain key or URL.
-
-1. Google Cloud project, enable **Google Health API**.
-2. **Google Auth Platform** - External user type; fill in Branding (app name,
-   support email, home page, privacy policy link) and add `github.com` to
-   Authorized domains.
-3. **Data Access** - add both scopes:
-   - `https://www.googleapis.com/auth/googlehealth.sleep.readonly`
-   - `https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly`
-4. **Audience** - Publish app. An app left in Testing issues refresh tokens that
-   expire after 7 days, which would silently kill an unattended cron job.
-5. **Clients** - create a Desktop app client; put the ID and secret in `.env`.
-6. `python3 authorize.py`, open the URL it prints, accept the unverified-app
-   warning. The refresh token is written to `.env`.
-
-The Fitbit account must be migrated to a Google account; legacy Fitbit accounts
-cannot reach this API at all.
+Python standard library only, both halves. Nothing to install.
 
 ## Deployment
 
-An Ubuntu VM, one crontab entry, no service:
-
-```
-CRON_TZ=America/Los_Angeles
-0 6 * * * cd ~/daily-updates && /usr/bin/python3 briefing.py >> briefing.log 2>&1
-```
-
-`CRON_TZ` is not optional - cloud VMs run on UTC, and without it the briefing
-arrives at the wrong hour and shifts twice a year with daylight saving.
+One Ubuntu VM holds the whole tree at `~/healthy-life`. The bot runs as a
+systemd service; the briefing is a crontab entry. See each half's README.
