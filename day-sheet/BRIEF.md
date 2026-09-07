@@ -145,26 +145,30 @@ holding the tick state, a POST when something is checked. Perhaps 150 lines, no
 dependencies, within the box's stdlib-only house rule. A web app manifest puts it
 on the phone's home screen with an icon, opening full screen.
 
-## Suggested build order
+## Build order
 
-Value first, infrastructure second, the hard thing last. Each phase is useful on
-its own and none of it is wasted if the next is never built.
+The email phase was skipped deliberately: shipping the plan by email first would
+have proved the generation before building around it, but the generation is
+already half-built inside `briefing.py tasks` and the page is small. The capacity
+arithmetic and window placement still have to be written - they just land in the
+page rather than in an email on the way there. The existing 7:30 email stays
+untouched until the page replaces it.
 
-**1. Capacity and placement, still by email.** `briefing.py tasks` already
-fetches everything. Add the arithmetic comparing estimates against window
-minutes, and have the model place work into named windows. Output stays the 7:30
-email. No new infrastructure, immediate value, and it proves the generation is
-good before anything is built around it.
+**1. The server and the page.** Stdlib HTTP server plus SQLite on the VM. A
+morning job writes the plan into SQLite; the page serves it; ticking POSTs back.
+Includes the capacity arithmetic and the placement of work into named windows,
+since the page has nothing to show without them.
 
-**2. The page.** Stdlib HTTP server plus SQLite on the VM. The 7:30 job writes
-the plan into SQLite instead of rendering an email; the page serves it; ticking
-POSTs back. Tailscale for access. This is where the prototype's HTML becomes real.
+**2. Access.** Tailscale on the VM, laptop and phone. Needs an account and the
+client installed - the only step that cannot be done from here.
 
-**3. Now-awareness and capacity display.** Client-side. Cheap, and it is what
-makes the page feel like a tool rather than a document.
+**3. Now-awareness and capacity display.** Client-side. A now-line, what is
+running, time left in the window, planned against available. Cheap, and it is
+what makes the page a tool rather than a document.
 
 **4. Replan.** An endpoint that re-runs generation from the current time with
-what is left. The real feature.
+what is left. The real feature, and the one that decides whether this is still
+in use in a month.
 
 **5. Evening sync.** A mechanical job that closes ticked tasks in Todoist.
 Complete only. Never reschedule.
