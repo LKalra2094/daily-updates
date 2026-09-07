@@ -18,7 +18,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from html import escape
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -78,15 +78,12 @@ def db():
 
 # ---------------------------------------------------------------- todoist
 
-def today_tasks(token, habits, today, log=None):
-    """Everything due today that is not one of the habits."""
+def today_tasks(token, today, log=None):
+    """Everything due today or overdue. Habits are not here; they live in the
+    habits bot's database, so nothing needs filtering out."""
     data = http("https://api.todoist.com/api/v1/tasks", token,
                 what="todoist tasks", log=log)
     tasks = data.get("results", data)
-    habit_names = {h["key"] for h in habits}
-    habit_projects = {
-        t.get("project_id") for t in tasks if t.get("content") in habit_names
-    }
     out = []
     for t in tasks:
         due = t.get("due") or {}
@@ -360,7 +357,7 @@ def main():
 
     tasks = []
     try:
-        tasks = today_tasks(token, habits, today, log=log)
+        tasks = today_tasks(token, today, log=log)
     except Unavailable as e:
         failed["todoist"] = str(e).split(": ", 1)[-1]
         log(f"todoist unavailable: {e}")
