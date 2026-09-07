@@ -76,15 +76,25 @@ An Ubuntu VM, four crontab entries, no service. Weekends shift an hour, because
 the sleep targets do - up at 8 rather than 7.
 
 ```
-CRON_TZ=America/Los_Angeles
 30 6 * * 1-5 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py habits >> ~/healthy-life/briefing.log 2>&1
 30 7 * * 6,0 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py habits >> ~/healthy-life/briefing.log 2>&1
 30 7 * * 1-5 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py tasks  >> ~/healthy-life/briefing.log 2>&1
 30 8 * * 6,0 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py tasks  >> ~/healthy-life/briefing.log 2>&1
 ```
 
-`CRON_TZ` is not optional - cloud VMs run on UTC, and without it the messages
-arrive at the wrong hour and shift twice a year with daylight saving.
+**Set the machine's timezone, not `CRON_TZ`.** Debian and Ubuntu ship a fork of
+cron that does not implement `CRON_TZ` - it is a cronie feature, it is absent
+from their `crontab(5)`, and the line is ignored without a warning. A cloud VM
+defaults to UTC, so the times above silently ran seven hours early until the box
+itself was moved:
 
-The log path is absolute on purpose: it sits at the repo root, above both
-halves, because it is output rather than code.
+```sh
+sudo timedatectl set-timezone America/Los_Angeles
+```
+
+Local times then follow daylight saving on their own. Nothing in the Python
+depends on this - both files pin their own `ZoneInfo` - so it only governs when
+cron fires.
+
+The log sits at the repo root, above both halves, because it is output rather
+than code.
