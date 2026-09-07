@@ -23,6 +23,7 @@ TARGET_BED_WEEKDAY = "23:00"
 TARGET_WAKE_WEEKDAY = "07:00"
 TARGET_BED_WEEKEND = "00:00"
 TARGET_WAKE_WEEKEND = "08:00"
+WINDOW = 28              # four whole weeks, matching the habits table
 
 
 def access_token(log=None):
@@ -145,6 +146,21 @@ def hhmm(minutes):
     return f"{int(minutes) // 60}h{int(minutes) % 60:02d}"
 
 
+def mean(values):
+    v = list(values)
+    return sum(v) / len(v)
+
+
+def night_kind(day):
+    """Work night or free night, named by the morning you wake up on.
+
+    A Sunday-to-Thursday night ends on a working morning; a Friday or Saturday
+    night does not. Comparing a Saturday lie-in against a Tuesday is comparing
+    two different things, so the baseline only ever averages like with like.
+    """
+    return "free" if date.fromisoformat(day).weekday() >= 5 else "work"
+
+
 def summarise(rows, hr_rows, today):
     """Most recent night, the baseline it sits against, and tonight's target."""
     tonight = targets_for(today + timedelta(days=1))
@@ -159,7 +175,7 @@ def summarise(rows, hr_rows, today):
 
     last = recent[0]
     nights_ago = (today - date.fromisoformat(last["date"])).days
-    window = recent[:30]
+    window = recent[:WINDOW]
     hours = last["asleep_minutes"] / 60
     tgt = targets_for(date.fromisoformat(last["date"]))
 
@@ -178,21 +194,29 @@ def summarise(rows, hr_rows, today):
             "deep_minutes": last["deep_minutes"],
             "rem_minutes": last["rem_minutes"],
             "awake_minutes": last["in_bed_minutes"] - last["asleep_minutes"],
-        },
-        "baseline": {
-            "nights": len(window),
-            "usual_asleep": hhmm(sum(r["asleep_minutes"] for r in window) / len(window)),
-            "usual_bed": _clock(sum(_bed_minutes(r["went_to_bed"]) for r in window) / len(window)),
-            "usual_wake": _clock(sum(_minutes(r["woke"]) for r in window) / len(window)),
-            "nights_hitting_target": sum(
-                1 for r in window if r["asleep_minutes"] >= TARGET_HOURS[0] * 60),
+            "efficiency_pct": last["efficiency_pct"],
+            "kind": night_kind(last["date"]),
         },
     })
 
-    # Bedtime spread: consistency outranks duration in the evidence.
-    if len(window) > 1:
-        beds = [_bed_minutes(r["went_to_bed"]) for r in window]
-        out["baseline"]["bedtime_spread_minutes"] = round(max(beds) - min(beds))
+    # Like against like: last night is only compared to nights of its own kind.
+    kind = night_kind(last["date"])
+    same = [r for r in window if night_kind(r["date"]) == kind]
+    eff = [r["efficiency_pct"] for r in same if r["efficiency_pct"]]
+    out["baseline"] = {
+        "of_night_kind": kind,
+        "nights": len(same),
+        "usual_asleep": hhmm(mean(r["asleep_minutes"] for r in same)),
+        "usual_bed": _clock(mean(_bed_minutes(r["went_to_bed"]) for r in same)),
+        "usual_wake": _clock(mean(_minutes(r["woke"]) for r in same)),
+        "usual_efficiency_pct": round(mean(eff)) if eff else None,
+        "nights_hitting_target": sum(
+            1 for r in same if r["asleep_minutes"] >= TARGET_HOURS[0] * 60),
+        # Consistency outranks duration in the evidence.
+        "bedtime_spread_minutes": round(
+            max(b for b in beds) - min(b for b in beds)
+        ) if (beds := [_bed_minutes(r["went_to_bed"]) for r in same]) else None,
+    }
 
     if hr_rows:
         recent_hr = [h for h in hr_rows if h["date"] <= today.isoformat()]

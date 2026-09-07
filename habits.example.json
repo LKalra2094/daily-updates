@@ -1,5 +1,5 @@
 [
-  {"key": "gym",       "label": "Gym",       "kind": "do",    "target_per_week": 5, "target_max": 6},
-  {"key": "reading",   "label": "Reading",   "kind": "do",    "target_per_week": 3},
-  {"key": "junk_food", "label": "Junk food", "kind": "avoid"}
+  {"key": "gym",       "label": "Gym / fitness", "short": "Gym",       "kind": "do",    "target_per_week": 7},
+  {"key": "reading",   "label": "Reading",       "short": "Reading",   "kind": "do",    "target_per_week": 3},
+  {"key": "junk_food", "label": "Junk food",     "short": "Junk food", "kind": "avoid"}
 ]

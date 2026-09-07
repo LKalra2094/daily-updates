@@ -36,7 +36,8 @@ from retry import Unavailable, retry
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DB = ROOT.parent / "habits-bot" / "habits.db"
 TZ = ZoneInfo("America/Los_Angeles")
-WINDOW = 30
+WINDOW = 28   # four whole weeks, so weekdays cancel and the paragraph's
+              # window is the same one the table shows
 TELEGRAM_LIMIT = 4096  # hard cap on a single Bot API message
 # Tried in order; 3.8 intermittently 503s under load. 3.6 is skipped - it
 # rejects thinkingBudget: 0.
@@ -139,30 +140,56 @@ def first_day(con):
     return today
 
 
+def is_daily(h):
+    """Does a seven-day share mean anything for this habit?
+
+    Only for habits meant to happen more or less every day. Meditation at three
+    a week would read 43% on a perfect week, which looks like failure and is
+    not. Derived from the target rather than a separate flag, so it stays true
+    if the target changes.
+    """
+    return h["kind"] == "avoid" or h.get("target_per_week", 0) >= 5
+
+
+def share(con, key, kind, a, b):
+    """Percentage of days between a and b that this habit held.
+
+    For an avoid habit a logged day is a clean day, so higher is better either
+    way and the two kinds are directly comparable.
+    """
+    days = (b - a).days
+    if days <= 0:
+        return None
+    logged = con.execute(
+        "SELECT COUNT(*) FROM completions WHERE habit=? AND day>=? AND day<?",
+        (key, a.isoformat(), b.isoformat()),
+    ).fetchone()[0]
+    return round(100 * logged / days)
+
+
 def stats(con, habits, today):
-    """Per-habit performance against its weekly target, over the window."""
+    """Two cuts per habit: the last four weeks, and the last seven days.
+
+    Twenty-eight days is the ground - four whole weeks, so weekday effects
+    cancel and one bad day barely moves it. Seven days is the momentum, and is
+    the same length for the same reason: every window holds one of each weekday,
+    so the number only moves when behaviour does.
+    """
     window_start = max(today - timedelta(days=WINDOW), first_day(con))
     elapsed = (today - window_start).days  # whole days, excludes today
-    weeks = elapsed / 7 if elapsed else 0
     out = []
     for h in habits:
-        logged = con.execute(
-            "SELECT COUNT(*) FROM completions WHERE habit=? AND day>=? AND day<?",
-            (h["key"], window_start.isoformat(), today.isoformat()),
-        ).fetchone()[0]
-        if h["kind"] == "avoid":
-            # Target is a clean day every day; what matters is lapses.
-            actual = (elapsed - logged) / weeks if weeks else 0
-            lo = hi = 0.0
-            met = actual <= 0.001
-        else:
-            actual = logged / weeks if weeks else 0
-            lo = h["target_per_week"]
-            hi = h.get("target_max", lo)
-            met = actual >= lo - 0.001
-        row = {**h, "logged": logged, "elapsed": elapsed,
-               "per_week": round(actual, 1), "target_lo": lo,
-               "target_hi": hi, "met": met}
+        recent = today - timedelta(days=7)
+        row = {**h,
+               "elapsed": elapsed,
+               "long_pct": share(con, h["key"], h["kind"], window_start, today),
+               "week_pct": (share(con, h["key"], h["kind"], recent, today)
+                            if is_daily(h) and recent >= window_start else None)}
+        row["direction"] = (
+            None if row["week_pct"] is None or row["long_pct"] is None
+            else "rising" if row["week_pct"] > row["long_pct"] + 5
+            else "slipping" if row["week_pct"] < row["long_pct"] - 5
+            else "holding")
         row.update(trend(con, h, today, window_start))
         out.append(row)
     return out, elapsed
@@ -202,14 +229,6 @@ def trend(con, h, today, window_start):
     return out
 
 
-def target_str(h):
-    if h["kind"] == "avoid":
-        return "0"
-    if h["target_hi"] != h["target_lo"]:
-        return f"{h['target_lo']:g}-{h['target_hi']:g}"
-    return f"{h['target_lo']:g}"
-
-
 # ---------------------------------------------------------------- prose
 
 def facts_habits(rows, elapsed, sleep_data, failed):
@@ -221,17 +240,14 @@ def facts_habits(rows, elapsed, sleep_data, failed):
             "X means logged, - means not."),
         "habits": [
             {"name": h["label"],
-             "what_the_number_counts": (
-                 "days this habit was BROKEN - lower is better, 0 is perfect"
-                 if h["kind"] == "avoid" else
-                 "sessions completed - higher is better"),
-             "actual_per_week": h["per_week"],
-             "target_per_week": target_str(h),
-             "at_or_above_target": h["met"],
-             **({"lapses_in_period": h["elapsed"] - h["logged"],
-                 "clean_days_in_period": h["logged"]}
-                if h["kind"] == "avoid" else
-                {"times_logged": h["logged"]}),
+             "counts": ("clean days - higher is better, and a full record means "
+                        "it was never broken" if h["kind"] == "avoid" else
+                        "days done - higher is better"),
+             "share_of_last_28_days": f"{h['long_pct']}%",
+             **({"share_of_last_7_days": f"{h['week_pct']}%",
+                 "direction": h["direction"]}
+                if h["week_pct"] is not None else
+                {"note": "not a daily habit - no seven-day figure"}),
              **{k: h[k] for k in
                 ("daily_pattern", "clean_days_running", "days_since_last")
                 if k in h}}
@@ -339,29 +355,35 @@ def render_habits(rows, elapsed, sleep_data, today, failed):
         out += ["HABITS", "Tracking starts today. First readout tomorrow.", ""]
     else:
         out.append(f"HABITS · last {elapsed} day{'s' if elapsed != 1 else ''}")
-        w = max(len(h["label"]) for h in rows)
-        out.append(f"{'':<{w}}   per wk   target")
+        w = max(len(h["short"]) for h in rows)
         for h in rows:
-            tail = "  lapses" if h["kind"] == "avoid" else ""
-            mark = "ok" if h["met"] else "--"
-            out.append(
-                f"{h['label']:<{w}}   {h['per_week']:>5.1f}   {target_str(h):>6}"
-                f"   {mark}{tail}"
-            )
+            week = f"{h['week_pct']}% this week" if h["week_pct"] is not None else ""
+            long = f"{h['long_pct']}%" if h["long_pct"] is not None else "-"
+            out.append(f"{h['short']:<{w}}  {long:>4}   {week}".rstrip())
         out.append("")
 
     if "health" in failed:
         out += [f"SLEEP — Google Health unreachable ({failed['health']})", ""]
     elif sleep_data and not sleep_data.get("no_data"):
-        n = sleep_data["most_recent_night"]
+        n, base = sleep_data["most_recent_night"], sleep_data.get("baseline") or {}
         when = ("last night" if n["nights_ago"] <= 1
                 else f"{n['nights_ago']} nights ago")
-        out.append(f"SLEEP · {when}")
-        out.append(f"{'asleep':<8} {n['asleep']:>6}   target {sleep_data['target_hours']}h")
-        out.append(f"{'bed':<8} {am_pm(n['went_to_bed']):>6}   target "
-                   f"{am_pm(n['target_bed_that_night'])}")
-        out.append(f"{'woke':<8} {am_pm(n['woke']):>6}   target "
-                   f"{am_pm(n['target_wake_that_night'])}")
+        # Compared against nights of its own kind: a Saturday lie-in is not
+        # evidence about a Tuesday.
+        kind = {"work": "work nights", "free": "weekends"}.get(
+            base.get("of_night_kind"), "usual")
+        out.append(f"SLEEP · {when} vs your {kind}")
+        pairs = [
+            ("slept",     n["asleep"],             base.get("usual_asleep")),
+            ("asleep at",  am_pm(n["went_to_bed"]), am_pm(base.get("usual_bed"))),
+            ("woke",       am_pm(n["woke"]),        am_pm(base.get("usual_wake"))),
+        ]
+        if n.get("efficiency_pct"):
+            pairs.append(("efficiency", f"{n['efficiency_pct']}%",
+                          f"{base['usual_efficiency_pct']}%"
+                          if base.get("usual_efficiency_pct") else None))
+        for lab, now, usual in pairs:
+            out.append(f"{lab:<10}{now:>8}" + (f"   usual {usual}" if usual else ""))
         out.append("")
 
     return "\n".join(out).rstrip()
