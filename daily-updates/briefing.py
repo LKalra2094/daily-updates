@@ -354,12 +354,13 @@ def render_habits(rows, elapsed, sleep_data, today, failed):
     elif elapsed == 0:
         out += ["HABITS", "Tracking starts today. First readout tomorrow.", ""]
     else:
-        out.append(f"HABITS · last {elapsed} day{'s' if elapsed != 1 else ''}")
         w = max(len(h["short"]) for h in rows)
+        out.append("HABITS")
+        out.append(f"{'':<{w}}  {'4 weeks':>10}  {'this week':>9}")
         for h in rows:
-            week = f"{h['week_pct']}% this week" if h["week_pct"] is not None else ""
             long = f"{h['long_pct']}%" if h["long_pct"] is not None else "-"
-            out.append(f"{h['short']:<{w}}  {long:>4}   {week}".rstrip())
+            week = f"{h['week_pct']}%" if h["week_pct"] is not None else ""
+            out.append(f"{h['short']:<{w}}  {long:>10}  {week:>9}".rstrip())
         out.append("")
 
     if "health" in failed:
@@ -370,9 +371,8 @@ def render_habits(rows, elapsed, sleep_data, today, failed):
                 else f"{n['nights_ago']} nights ago")
         # "usual" averages only nights of the same kind - a Saturday lie-in is
         # not evidence about a Tuesday - but that is arithmetic, not a caption.
-        out.append(f"SLEEP · {when}")
         pairs = [
-            ("slept",     n["asleep"],             base.get("usual_asleep")),
+            ("slept",      n["asleep"],             base.get("usual_asleep")),
             ("asleep at",  am_pm(n["went_to_bed"]), am_pm(base.get("usual_bed"))),
             ("woke",       am_pm(n["woke"]),        am_pm(base.get("usual_wake"))),
         ]
@@ -380,8 +380,10 @@ def render_habits(rows, elapsed, sleep_data, today, failed):
             pairs.append(("efficiency", f"{n['efficiency_pct']}%",
                           f"{base['usual_efficiency_pct']}%"
                           if base.get("usual_efficiency_pct") else None))
+        out.append("SLEEP" if when == "last night" else f"SLEEP · {when}")
+        out.append(f"{'':<10}  {'last night':>10}  {'usual':>8}")
         for lab, now, usual in pairs:
-            out.append(f"{lab:<10}{now:>8}" + (f"   usual {usual}" if usual else ""))
+            out.append(f"{lab:<10}  {now:>10}  {usual or '':>8}".rstrip())
         out.append("")
 
     return "\n".join(out).rstrip()
