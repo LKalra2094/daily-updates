@@ -107,8 +107,137 @@ Habits moved to a separate bot with its own evening message and its own Telegram
 identity. It owns the database; this reads it. Todoist kept the thing it is good
 at, which is tasks.
 
+## The morning split into two messages
+
+One message tried to be two things. Half past six is strategic - who you have
+been, and how you slept - and is read in bed. Half past seven is operational -
+what today asks of you - and is read standing up. They want different mindsets,
+different hours, and as it turned out different mediums.
+
+The 6:30 message goes to Telegram because it is a glance. The 7:30 one goes by
+email because it is a document: tasks carry their notes, deadlines, estimates
+and postpone counts, and Telegram's fixed-width blocks scroll sideways on a
+phone and cap at 4,096 characters.
+
+Casualty of the split: the wind-down line. It read as sleep advice but was
+computed from the calendar, and the calendar is no longer in that message.
+
+## Twenty-eight days, and seven
+
+Four whole weeks, so weekday effects cancel and one bad day barely moves the
+number. Seven for the momentum figure for the same reason - every window holds
+exactly one of each weekday, so it moves when behaviour moves and not when the
+window happens to land on a weekend. Three or four days was considered and
+rejected: with three days there are only four possible values, and one miss
+reads as a collapse.
+
+Both windows clamp to the day tracking started, so both report on whatever
+history exists rather than withholding themselves until full.
+
+The seven-day column only appears for habits meant to happen most days, derived
+from `target_per_week >= 5` or `kind: avoid` rather than a separate flag.
+Meditation at three a week would read 43% on a perfect week, which looks like
+failure and is not.
+
+## Targets left the table
+
+They live in the reader's head. Printed, they turned every row into a verdict,
+and they are not passed to the model either - given a target, it eventually
+writes "you are behind", which is the exact framing this is built to avoid.
+
+## Three prompts, one dataset
+
+Tested against 28 simulated days. A minimal prompt - say what the message is
+for, cap the length - produced a hype-bot: bullets, bold, "crushing workouts",
+"go win today", and unsolicited advice. Adding voice and honesty rules swung it
+the other way into pure recital, five percentages in a row.
+
+Only the long prompt produced something worth reading. The lesson: each block in
+it prevents a specific failure the other two demonstrate. Drop "no bullets" and
+you get bullets. Add "never invent a number" without "do not read the table
+back" and you get a spreadsheet in sentences.
+
+## Sleep: what is worth trusting
+
+Fitbit's stage classification scores a Cohen's kappa of about 0.41 against
+polysomnography, and roughly 40% of real deep sleep is misclassified as light
+(*SLEEP Advances*, 2025, 62 adults, six devices). Apple Watch scored 0.53 in the
+same study, Garmin 0.21.
+
+But sensitivity for detecting sleep at all is 91-93%, and a meta-analysis (JMIR
+2019) found that heart-rate-based Fitbits - the generation this one is - show no
+significant difference from PSG on total sleep time, wake after sleep onset, or
+efficiency. Per-epoch accuracy and night-level accuracy are different things: it
+misplaces *which* minutes were awake while getting the *total* about right.
+
+So: total sleep, sleep period, awake minutes, efficiency, sleep start and wake
+time are trustworthy at the level of a single night. Deep, REM and light are
+trustworthy only as a trend across weeks. Sleep onset latency is discarded
+entirely - it is systematically underestimated and mostly measures the watch's
+own detection lag.
+
+Two things the numbers do not say on their own. The device cannot see you get
+into bed, so its "bed time" is roughly when you fell asleep, and efficiency is
+measured against a window that starts there rather than at lights-off - which is
+why it reads high against the clinical 85-95%. Trust it for comparing your own
+nights, not against a benchmark.
+
+Resting heart rate is calculated `WITH_SLEEP`, from heart rate during the sleep
+period rather than a daytime average. That makes it cleaner - no coffee, no
+stairs, no standing up - and it is why it rises after drinking, a late meal,
+short sleep, or something coming on. A night without sleep data yields no
+resting heart rate for that day.
+
+## Sleep compares like with like
+
+A Saturday lie-in is not evidence about a Tuesday. The baseline averages only
+nights of the same kind, split by the morning you wake from them: Sunday to
+Thursday nights end on a working morning, Friday and Saturday nights do not.
+This is the same split `targets_for` already used.
+
+## Google Health has more than is being read
+
+Available today with the scopes already granted, and unused: continuous heart
+rate, blood oxygen, heart rate variability, and `daily-heart-rate-variability` -
+average HRV, non-REM heart rate, entropy, and deep-sleep RMSSD. HRV is the best
+recovery signal a wrist device produces and the one metric that would
+independently corroborate the alcohol and sleep habits.
+
+Behind one more consent click (they return 403): steps, distance, active
+minutes, VO2 max. Returning nothing: weight, body fat - no scale feeds them.
+Not real data types at all: blood pressure, stress, readiness, respiratory rate,
+skin temperature, nutrition, hydration.
+
+## CRON_TZ does nothing on Ubuntu
+
+Debian and Ubuntu ship a fork of cron that does not implement `CRON_TZ`. It is a
+cronie feature, it is absent from their `crontab(5)`, and the line is ignored
+without a warning. The box defaulted to UTC, so every "6:30" job fired at 23:30
+local and the morning briefing arrived at night, from first deployment until it
+was found.
+
+Set the machine's timezone instead - `timedatectl set-timezone` - and cron times
+become genuinely local and follow daylight saving on their own. Nothing in the
+Python was ever affected; both files pin their own `ZoneInfo`.
+
+**This lesson is recorded incorrectly in `Newsletter-Digest/BRIEF.md`**, which
+still says `CRON_TZ` is not optional. It will reproduce the same bug.
+
 ## Not built yet
 
+- **Days off.** Nothing knows about public holidays or leave. On Labor Day the
+  system blocks 7am to 5pm as office, offers two short evening windows instead
+  of a whole free day, and applies weekday sleep targets. A `days_off` list of
+  dates in `week.json`, behaving exactly like a Saturday, covers both holidays
+  and PTO - which a subscribed holiday calendar never would. Send times cannot
+  follow, since cron cannot read the file.
+- **Heart rate**, given the same treatment as sleep above: what the research
+  says, which metrics survive it, what belongs in the table.
+- **The day sheet**, specified in `day-sheet/BRIEF.md`.
+- **Newsletter digest**, specified in `Newsletter-Digest/BRIEF.md`.
+- `gemini-3.8-flash` has returned 429 on every call across a full day. The
+  fallback chain works, so nothing breaks, but the first model is never reached.
+- The GitHub repo description still describes only the Telegram briefing.
 - A weekly edition: same data, longer window, deep and REM trends that need a
   week to mean anything.
 - A standing intention - one line written on Sunday, echoed each morning. Highest
