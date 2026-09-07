@@ -67,26 +67,34 @@ A session at 10am or later is watched at its actual time. So a 6am race does not
 block 6am; it blocks a couple of hours of the late morning. The planner should
 place it accordingly rather than treating the broadcast time as fixed.
 
-**Drinking.** Some events are known in advance to involve drinking, and nothing
-physical should be scheduled after one. See event context below.
+**Drinking.** Some events are known in advance to involve drinking. Nothing
+physical belongs after one. This is written in the event's description in plain
+words, not as a tag - see event context below.
 
-## Event context: descriptions and tags
+**Where the reader lives**, so travel time to an event's location can be
+estimated. To be filled in.
+
+**Getting ready.** On a weekend morning the reader has probably not showered,
+so anything leaving the house needs half an hour or so before it. The model
+should reason about this rather than be told it case by case.
+
+## Event context
 
 `gcal.py` already parses every property of a VEVENT into a dict, so
-`DESCRIPTION` is available and simply is not carried through `events_on`. Two
-lines to expose it.
+`DESCRIPTION` and `LOCATION` are available and simply are not carried through
+`events_on`. Two lines to expose them, and both go to the model.
 
-Two mechanisms, because there are two different needs:
+**The description is free text and stays free text.** "Likely a late one",
+"bring the gym kit, going straight after", "dinner at theirs". No tag
+vocabulary, no keywords to remember, no convention that breaks the first time
+something does not fit it. The model reads what is written and works out what it
+means for the rest of the day - that is the intelligence, and encoding it as
+`if #drinks` throws it away.
 
-**Free text in the event description**, read by the model as context. "Likely a
-late one", "bring the gym kit, going straight after", "dinner is at the
-restaurant". Flexible, lives with the event, nothing to remember.
-
-**Tags for hard constraints**, enforced in Python. `#drinks` in the title or
-description means nothing physical is scheduled after that event that day. This
-is a rule, not a nuance, and rules belong in code where they cannot be
-forgotten - the same line drawn everywhere else here. Start with `#drinks` and
-add tags only when a genuine constraint appears.
+**The location is for travel.** Given where the reader lives and where an event
+is, the model estimates how long the journey takes and how much earlier they
+have to leave. It will sometimes be wrong. An estimate that is roughly right
+beats a plan that pretends travel is free.
 
 ## The evening session
 
@@ -106,13 +114,27 @@ plans anything.
 It also pairs naturally with the evening sync in step 5 - what got done, then
 what matters next.
 
-## Non-negotiable: the model plans, it never computes
+## The one thing the model must not do
 
-Free windows, capacity arithmetic and the placement of fixed things are done in
-Python and handed over finished. Asked to invent times, a model produces
-plausible ones, and a plausible schedule that double-books you is worse than no
-schedule. This is the same rule the morning briefing already follows for habit
-numbers, for the same reason.
+**Never invent a fact about the reader.** Free windows, habit counts, an event's
+real start time, what day it is, how long the gym takes. Those are computed in
+Python from real sources and handed over finished. A plan built on a window that
+does not exist is worse than no plan.
+
+**Everything else is judgment, and judgment is the whole point.** What goes
+where and in what order. How long to allow for showering on a Saturday morning
+when the reader probably has not. How much to leave for the drive, given the
+event's location and where they live. Whether anything physical belongs after an
+event where they will be drinking. Whether a heavy day should end early.
+
+Estimating that a shower takes half an hour is reasoning about the world, and
+the model should do it. Claiming a free window that is not there is a false
+statement about the reader, and it must not. That is the line, and it is the
+only one.
+
+After the model returns a plan, Python checks it against the windows it was
+given: nothing placed outside one, nothing overfilled without saying so. That is
+validation, not authorship.
 
 ## Non-negotiable: the model is not in the write path
 
