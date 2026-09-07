@@ -368,11 +368,9 @@ def render_habits(rows, elapsed, sleep_data, today, failed):
         n, base = sleep_data["most_recent_night"], sleep_data.get("baseline") or {}
         when = ("last night" if n["nights_ago"] <= 1
                 else f"{n['nights_ago']} nights ago")
-        # Compared against nights of its own kind: a Saturday lie-in is not
-        # evidence about a Tuesday.
-        kind = {"work": "work nights", "free": "weekends"}.get(
-            base.get("of_night_kind"), "usual")
-        out.append(f"SLEEP · {when} vs your {kind}")
+        # "usual" averages only nights of the same kind - a Saturday lie-in is
+        # not evidence about a Tuesday - but that is arithmetic, not a caption.
+        out.append(f"SLEEP · {when}")
         pairs = [
             ("slept",     n["asleep"],             base.get("usual_asleep")),
             ("asleep at",  am_pm(n["went_to_bed"]), am_pm(base.get("usual_bed"))),
