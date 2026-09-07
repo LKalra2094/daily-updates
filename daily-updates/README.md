@@ -72,12 +72,19 @@ cannot reach this API at all.
 
 ## Deployment
 
-An Ubuntu VM, one crontab entry, no service:
+An Ubuntu VM, four crontab entries, no service. Weekends shift an hour, because
+the sleep targets do - up at 8 rather than 7.
 
 ```
 CRON_TZ=America/Los_Angeles
-0 6 * * * cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py >> briefing.log 2>&1
+30 6 * * 1-5 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py habits >> ~/healthy-life/briefing.log 2>&1
+30 7 * * 6,0 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py habits >> ~/healthy-life/briefing.log 2>&1
+30 7 * * 1-5 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py tasks  >> ~/healthy-life/briefing.log 2>&1
+30 8 * * 6,0 cd ~/healthy-life/daily-updates && /usr/bin/python3 briefing.py tasks  >> ~/healthy-life/briefing.log 2>&1
 ```
 
-`CRON_TZ` is not optional - cloud VMs run on UTC, and without it the briefing
-arrives at the wrong hour and shifts twice a year with daylight saving.
+`CRON_TZ` is not optional - cloud VMs run on UTC, and without it the messages
+arrive at the wrong hour and shift twice a year with daylight saving.
+
+The log path is absolute on purpose: it sits at the repo root, above both
+halves, because it is output rather than code.
