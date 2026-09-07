@@ -179,12 +179,14 @@ def stats(con, habits, today):
     elapsed = (today - window_start).days  # whole days, excludes today
     out = []
     for h in habits:
-        recent = today - timedelta(days=7)
+        # Both windows clamp to the start of tracking, so both report on
+        # whatever history exists rather than waiting to be full.
+        recent = max(today - timedelta(days=7), window_start)
         row = {**h,
                "elapsed": elapsed,
                "long_pct": share(con, h["key"], h["kind"], window_start, today),
                "week_pct": (share(con, h["key"], h["kind"], recent, today)
-                            if is_daily(h) and recent >= window_start else None)}
+                            if is_daily(h) else None)}
         row["direction"] = (
             None if row["week_pct"] is None or row["long_pct"] is None
             else "rising" if row["week_pct"] > row["long_pct"] + 5
