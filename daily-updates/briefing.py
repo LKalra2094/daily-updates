@@ -346,6 +346,15 @@ def am_pm(hhmm):
     return f"{h12}:{m:02d}{suffix}" if m else f"{h12}{suffix}"
 
 
+# One grid for both tables. Two blocks that almost line up are harder to read
+# than two that either match or clearly do not, and this is read half asleep.
+LABEL_W, COL_A, COL_B = 12, 10, 9
+
+
+def grid(label, a, b=""):
+    return f"{label:<{LABEL_W}}  {a:>{COL_A}}  {b:>{COL_B}}".rstrip()
+
+
 def render_habits(rows, elapsed, sleep_data, today, failed):
     """The fixed-width part of the 6:30 message: the record, and last night."""
     out = [today.strftime("%A, %-d %B"), ""]
@@ -354,13 +363,13 @@ def render_habits(rows, elapsed, sleep_data, today, failed):
     elif elapsed == 0:
         out += ["HABITS", "Tracking starts today. First readout tomorrow.", ""]
     else:
-        w = max(len(h["short"]) for h in rows)
         out.append("HABITS")
-        out.append(f"{'':<{w}}  {'4 weeks':>10}  {'this week':>9}")
+        out.append(grid("", "4 weeks", "this week"))
         for h in rows:
-            long = f"{h['long_pct']}%" if h["long_pct"] is not None else "-"
-            week = f"{h['week_pct']}%" if h["week_pct"] is not None else ""
-            out.append(f"{h['short']:<{w}}  {long:>10}  {week:>9}".rstrip())
+            out.append(grid(
+                h["short"],
+                f"{h['long_pct']}%" if h["long_pct"] is not None else "-",
+                f"{h['week_pct']}%" if h["week_pct"] is not None else ""))
         out.append("")
 
     if "health" in failed:
@@ -381,9 +390,9 @@ def render_habits(rows, elapsed, sleep_data, today, failed):
                           f"{base['usual_efficiency_pct']}%"
                           if base.get("usual_efficiency_pct") else None))
         out.append("SLEEP" if when == "last night" else f"SLEEP · {when}")
-        out.append(f"{'':<10}  {'last night':>10}  {'usual':>8}")
+        out.append(grid("", "last night", "usual"))
         for lab, now, usual in pairs:
-            out.append(f"{lab:<10}  {now:>10}  {usual or '':>8}".rstrip())
+            out.append(grid(lab, now, usual or ""))
         out.append("")
 
     return "\n".join(out).rstrip()
