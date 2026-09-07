@@ -147,31 +147,26 @@ on the phone's home screen with an icon, opening full screen.
 
 ## Build order
 
-The email phase was skipped deliberately: shipping the plan by email first would
-have proved the generation before building around it, but the generation is
-already half-built inside `briefing.py tasks` and the page is small. The capacity
-arithmetic and window placement still have to be written - they just land in the
-page rather than in an email on the way there. The existing 7:30 email stays
-untouched until the page replaces it.
+**1. The server and the page.** A standard-library HTTP server plus SQLite on
+the VM. A morning job writes the day's plan into SQLite, the page serves it, and
+ticking POSTs back. This includes the capacity arithmetic and the placement of
+work into named windows, since the page has nothing to show without them.
 
-**1. The server and the page.** Stdlib HTTP server plus SQLite on the VM. A
-morning job writes the plan into SQLite; the page serves it; ticking POSTs back.
-Includes the capacity arithmetic and the placement of work into named windows,
-since the page has nothing to show without them.
-
-**2. Access.** Tailscale on the VM, laptop and phone. Needs an account and the
-client installed - the only step that cannot be done from here.
+**2. Access.** Tailscale on the VM, the laptop and the phone. Needs an account
+and the client installed - the only step that cannot be done from a terminal.
 
 **3. Now-awareness and capacity display.** Client-side. A now-line, what is
-running, time left in the window, planned against available. Cheap, and it is
-what makes the page a tool rather than a document.
+currently running, time left in the window, planned against available. Cheap,
+and it is what makes the page a tool rather than a document.
 
 **4. Replan.** An endpoint that re-runs generation from the current time with
-what is left. The real feature, and the one that decides whether this is still
-in use in a month.
+whatever is left. The real feature, and the one that decides whether this is
+still in use in a month.
 
 **5. Evening sync.** A mechanical job that closes ticked tasks in Todoist.
-Complete only. Never reschedule.
+Complete only, never reschedule.
+
+The 7:30 email stays exactly as it is until the page replaces it.
 
 ## Open questions
 
