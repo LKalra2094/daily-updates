@@ -244,3 +244,53 @@ still says `CRON_TZ` is not optional. It will reproduce the same bug.
   value for the least work, since it needs no integration at all.
 - People cadence: recurring "call X" tasks already produce the right data.
 - Two-way on the briefing itself - replying to log or note something.
+
+## The gym bot is a second bot, not a second feature
+
+The obvious move was handlers on the habits bot - one chat for everything,
+which is what "assistant" is supposed to feel like. Rejected on two counts.
+
+One process means a crash while parsing `bench 150` takes the evening habit card
+down with it, and the habit card is the half that has to be reliable. And a bot
+has one command list: the gym needs enough commands that the habits ones stop
+being findable in the menu.
+
+Separate token, separate process, separate database. The cost is a second chat
+to open, which is the right thing to pay.
+
+## Weight only; reps are not recorded
+
+Standard advice says a weight-only log misreads progress, because most weeks
+you add reps rather than plates. It does not apply here - the reps are fixed
+every session, so the only thing that moves is the weight, and asking for a
+second number at the rack would be friction buying nothing.
+
+## Weights are signed, so progress is always up
+
+Assisted pull ups are recorded as negative: `-60` is sixty pounds of help, and
+progress runs `-60 → -40 → 0`. The alternative was a per-exercise
+"lower is better" flag, which puts a branch in every comparison, every chart and
+every summary the trend will ever feed. The sign carries the same information
+and nothing downstream has to know.
+
+## Per-exercise slash commands were rejected
+
+The first sketch was `/bench 150`. Telegram delivers unregistered commands
+anyway, so it would have worked, but it means either a command menu with twenty
+entries in it or having to recall an exact slug while standing at the rack -
+which is the thing this was built to stop.
+
+Instead the list is printed with numbers and updates are plain messages: `1 150`
+by position, `bench 150` by name. Nothing to register, and `/add` can invent an
+exercise at the gym without a deploy.
+
+## Nothing is overwritten
+
+There is no current-weight column. Every update appends `(timestamp, exercise,
+weight)` and the current weight is a query for the newest row. The trend is
+therefore free rather than a feature to be added later, and `/undo` is one
+`DELETE`.
+
+`/remove` deactivates instead of deleting, and `/add` of a name used before
+wakes the old row rather than inserting a second one - so a lift dropped for six
+months rejoins its own history instead of starting a parallel record.

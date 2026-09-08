@@ -13,6 +13,11 @@ what the record shows.
 
 The evening half records. The morning half reflects it back.
 
+**`gym-bot/`** is a third program on its own Telegram bot, and it is not part of
+that loop. `/push`, `/pull` or `/legs` returns the working weight for every
+exercise on that split; a plain `1 150` records a new one. It shares nothing
+with the other two but the `.env` file.
+
 ## The two contracts between them
 
 **`habits.json` at the repo root is the single source of truth for what a habit
@@ -36,6 +41,7 @@ Copy `habits.example.json` to `habits.json` to start.
 | `habits.json` | The habit list, shared (not in git - see `habits.example.json`) |
 | `.env` | Every credential for both halves (not in git) |
 | `habits-bot/` | The evening bot; owns `habits.db` |
+| `gym-bot/` | Working weights per split; owns `gym.db`, shares nothing |
 | `daily-updates/` | The morning briefing; reads `habits.db` |
 | `DECISIONS.md` | Why it is built this way, including the paths not taken |
 
@@ -45,5 +51,5 @@ Python standard library only, both halves. Nothing to install.
 
 ## Deployment
 
-One Ubuntu VM holds the whole tree at `~/healthy-life`. The bot runs as a
-systemd service; the briefing is a crontab entry. See each half's README.
+One Ubuntu VM holds the whole tree at `~/healthy-life`. The two bots run as
+systemd services; the briefing is a crontab entry. See each README.
